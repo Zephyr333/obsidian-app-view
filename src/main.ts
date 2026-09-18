@@ -77,14 +77,43 @@ class ApplicationView extends FileView {
     });
   }
 
-  canAcceptExtension(_extension: string) {
-    return false;
+  canAcceptExtension(extension: string) {
+    return extension === 'md';
   }
 
   async onLoadFile(file: TFile) {
     this.file = file;
     this.path = file.path;
     this.lastText = undefined;
+
+    if (this.owner.settings.noteStates[file.path] !== 'app') {
+      window.setTimeout(() => {
+        void (async () => {
+          if (this.leaf.view !== this) return;
+          let savedState = this.owner.settings.markdownStates?.[file.path];
+          const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
+          if (!savedState && hasReaderMode) {
+            savedState = { mode: 'preview', source: false };
+          }
+          if (!savedState) {
+            savedState = { mode: 'preview', source: false };
+          }
+          this.owner.setPendingModeRestoration(file.path, savedState);
+          await this.leaf.setViewState({
+            type: 'markdown',
+            state: {
+              file: file.path,
+              mode: savedState.mode,
+              source: savedState.source
+            },
+            active: true
+          });
+          await this.owner.applyMarkdownModeWhenReady(this.leaf, file.path, savedState);
+        })();
+      }, 0);
+      return;
+    }
+
     await this.refresh();
   }
 
@@ -452,6 +481,10 @@ export default class ApplicationPlugin extends Plugin {
     return this.editing;
   }
 
+  setPendingModeRestoration(path: string, state: MarkdownState) {
+    this.pendingModeRestorations.set(path, state);
+  }
+
   async onload() {
     await this.loadSettings();
 
@@ -620,18 +653,16 @@ export default class ApplicationPlugin extends Plugin {
       }
 
       if (this.settings.noteStates[file.path] === 'app') {
-        const text = await this.sourceText(file);
-        const parsed = parseRanges(text);
-        if (parsed.ranges.length > 0) {
-          const targetLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path)
-            ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
-          if (targetLeaf && targetLeaf.view instanceof MarkdownView) {
-            await targetLeaf.setViewState({ type: VIEW, state: { path: file.path, file: file.path }, active: true });
-            return;
-          }
-        } else {
-          this.settings.noteStates[file.path] = 'detail';
-          await this.saveSettings();
+        const alreadyApp = this.app.workspace.getLeavesOfType(VIEW).some(l => l.view instanceof ApplicationView && l.view.path === file.path);
+        if (alreadyApp) return;
+
+        const targetLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path)
+          ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+        if (targetLeaf && targetLeaf.view instanceof MarkdownView) {
+          await targetLeaf.setViewState({ type: VIEW, state: { path: file.path, file: file.path }, active: true });
+          await this.app.workspace.revealLeaf(targetLeaf);
+          this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+          return;
         }
       } else {
         let savedState = this.settings.markdownStates?.[file.path];
@@ -679,7 +710,6 @@ export default class ApplicationPlugin extends Plugin {
         const source = (leaf.view.getState() as any)?.source ?? false;
         if (!this.settings.markdownStates) this.settings.markdownStates = {};
         this.settings.markdownStates[file.path] = { mode, source };
-        this.settings.noteStates[file.path] = 'detail';
         void this.saveSettings();
       }
     }));
@@ -797,14 +827,8 @@ export default class ApplicationPlugin extends Plugin {
 
     let savedState = this.settings.markdownStates?.[file.path];
     const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
-    if (!savedState || (hasReaderMode && savedState.mode !== 'preview')) {
-      if (hasReaderMode) {
-        const content = await this.app.vault.cachedRead(file);
-        const hasBody = content.replace(/^---\s*\n[\s\S]*?\n---\s*\n*/, '').trim().length > 0;
-        if (hasBody) {
-          savedState = { mode: 'preview', source: false };
-        }
-      }
+    if (!savedState && hasReaderMode) {
+      savedState = { mode: 'preview', source: false };
     }
     if (!savedState) {
       savedState = { mode: 'preview', source: false };
@@ -827,18 +851,17 @@ export default class ApplicationPlugin extends Plugin {
     await this.applyMarkdownModeWhenReady(targetLeaf, file.path, savedState);
   }
 
-  private async applyMarkdownModeWhenReady(leaf: WorkspaceLeaf, filePath: string, targetState: MarkdownState): Promise<void> {
+  async applyMarkdownModeWhenReady(leaf: WorkspaceLeaf, filePath: string, targetState: MarkdownState): Promise<void> {
     const targetMode = targetState.mode;
     const targetSource = targetMode === 'source' ? (targetState.source ?? false) : false;
 
-    for (let attempt = 0; attempt < 15; attempt++) {
+    for (let attempt = 0; attempt < 12; attempt++) {
       if (leaf.view instanceof MarkdownView && leaf.view.file?.path === filePath) {
         const view = leaf.view;
         const currentMode = view.getMode();
         const currentSource = (view.getState() as any)?.source ?? false;
 
         if (currentMode !== targetMode || (targetMode === 'source' && currentSource !== targetSource)) {
-          // 1. leaf.setViewState
           try {
             const vs = leaf.getViewState();
             if (vs?.state) {
@@ -849,29 +872,7 @@ export default class ApplicationPlugin extends Plugin {
           } catch (e) {
             console.warn('leaf.setViewState error:', e);
           }
-
-          // 2. view.setState
-          try {
-            if (leaf.view instanceof MarkdownView) {
-              const st = leaf.view.getState();
-              await leaf.view.setState({
-                ...st,
-                mode: targetMode,
-                source: targetSource
-              }, { history: false });
-            }
-          } catch (e) {
-            console.warn('view.setState error:', e);
-          }
-
-          // 3. Fallback to command
-          if (leaf.view instanceof MarkdownView && leaf.view.getMode() !== targetMode) {
-            this.app.workspace.setActiveLeaf(leaf, { focus: true });
-            (this.app as any).commands?.executeCommandById('markdown:toggle-preview');
-          }
-        }
-
-        if (leaf.view instanceof MarkdownView && leaf.view.getMode() === targetMode) {
+        } else {
           if (!this.settings.markdownStates) this.settings.markdownStates = {};
           this.settings.markdownStates[filePath] = { mode: targetMode, source: targetSource };
           await this.saveSettings();
@@ -880,7 +881,7 @@ export default class ApplicationPlugin extends Plugin {
         }
       }
 
-      await new Promise(resolve => setTimeout(resolve, 40));
+      await new Promise(resolve => window.setTimeout(resolve, 50));
     }
 
     this.pendingModeRestorations.delete(filePath);
