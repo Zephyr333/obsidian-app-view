@@ -66,12 +66,24 @@ test('a complete range remains valid at EOF without final newline', () => {
   assert.equal(result.ranges.length, 1);
 });
 
-test('detectBlockAt detects heading hierarchy', () => {
-  const doc = '# 顶层标题\n引言\n## 二级标题\n内容1\n### 三级\n内容2\n## 另一个二级\n';
-  const block = detectBlockAt(doc, doc.indexOf('## 二级标题'));
-  assert.ok(block);
-  assert.ok(block.label.includes('2级标题'));
-  assert.equal(doc.slice(block.from, block.to), '## 二级标题\n内容1\n### 三级\n内容2\n');
+test('detectBlockAt detects heading hierarchy and stops before existing markers', () => {
+  const doc = '# 顶层标题\n引言\n%%app%%\n## 二级标题\n内容1\n%%/app%%\n## 另一个二级\n';
+  // 1. Detect H1 above marker: stops before %%app%%
+  const h1Block = detectBlockAt(doc, doc.indexOf('# 顶层标题'));
+  assert.ok(h1Block);
+  assert.equal(h1Block.label, '当前章节');
+  assert.equal(h1Block.isEnclosed, false);
+  assert.equal(doc.slice(h1Block.from, h1Block.to), '# 顶层标题\n引言\n');
+
+  // 2. Cursor inside existing range (on heading): isEnclosed is true
+  const h2Block = detectBlockAt(doc, doc.indexOf('## 二级标题'));
+  assert.ok(h2Block);
+  assert.equal(h2Block.isEnclosed, true);
+
+  // 3. Cursor inside existing range (on content): isEnclosed is true
+  const contentBlock = detectBlockAt(doc, doc.indexOf('内容1'));
+  assert.ok(contentBlock);
+  assert.equal(contentBlock.isEnclosed, true);
 });
 
 test('detectBlockAt detects nested lists and callouts', () => {

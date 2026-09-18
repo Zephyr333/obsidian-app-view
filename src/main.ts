@@ -537,6 +537,10 @@ export default class ApplicationPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (this.settings.viewName === '行动版' || this.settings.viewName === '应用版') {
+      this.settings.viewName = '速查版';
+      await this.saveSettings();
+    }
   }
 
   async saveSettings() {

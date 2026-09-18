@@ -53,7 +53,7 @@ export function parseRanges(text: string): ParsedRanges {
       const marker: Marker = { ...line, kind };
       result.markers.push(marker);
       if (kind === 'start') {
-        if (open) result.errors.push(`第 ${line.number} 行：应用范围不能嵌套。`);
+        if (open) result.errors.push(`第 ${line.number} 行：速查范围不能嵌套。`);
         else open = marker;
       } else if (!open) result.errors.push(`第 ${line.number} 行：结束标记缺少开始标记。`);
       else {
@@ -111,7 +111,7 @@ export function removeRangeEdit(text: string, offset: number): TextEdit {
   const parsed = parseRanges(text);
   if (parsed.errors.length) throw new Error(parsed.errors[0]);
   const range = parsed.ranges.find(r => offset >= r.start.from && offset <= r.end.to);
-  if (!range) throw new Error('请把光标放在需要取消的应用范围内。');
+  if (!range) throw new Error('请把光标放在需要取消的速查范围内。');
   return { from: range.start.from, to: range.end.end, text: range.text };
 }
 
@@ -136,6 +136,15 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   if (lines.length === 0) return undefined;
   const parsed = parseRanges(text);
 
+  // 1. If cursor is anywhere inside an existing range (heading, paragraph, list, empty line inside range, etc.)
+  const enclosingRange = parsed.ranges.find(r =>
+    (offset >= r.from && offset <= r.to) ||
+    (offset >= r.start.from && offset <= r.end.end)
+  );
+  if (enclosingRange) {
+    return { from: enclosingRange.start.from, to: enclosingRange.end.end, label: '速查范围', isEnclosed: true };
+  }
+
   let curIdx = lines.findIndex(l => offset >= l.from && offset <= l.to);
   if (curIdx === -1) {
     if (offset >= text.length && lines.length > 0) curIdx = lines.length - 1;
@@ -145,23 +154,38 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   const curLine = lines[curIdx];
   if (!curLine.text.trim()) return undefined;
 
+  // Ignore marker lines or YAML frontmatter lines
+  if (/^%%(\/)?app%%[ \t]*$/.test(curLine.text)) return undefined;
+  if (parsed.protectedLines.has(curLine.number) && !/^ {0,3}(`{3,}|~{3,})/.test(curLine.text)) {
+    if (lines[0]?.text.replace(/^\uFEFF/, '') === '---') {
+      const secondFence = lines.slice(1).findIndex(l => /^(---|\.\.\.)\s*$/.test(l.text));
+      if (secondFence !== -1 && curIdx <= secondFence + 1) return undefined;
+    }
+  }
+
   let startIdx = curIdx;
   let endIdx = curIdx;
   let label = '当前段落';
 
-  // 1. Heading
+  // 1. Heading (stops before existing markers or next heading of same/higher level)
   const headingMatch = /^(#{1,6})[ \t]+/.exec(curLine.text);
   if (headingMatch) {
     const level = headingMatch[1].length;
-    label = `当前章节 (${level}级标题及下属内容)`;
+    label = '当前章节';
     endIdx = lines.length - 1;
     for (let i = curIdx + 1; i < lines.length; i++) {
-      const nextHeading = /^(#{1,6})[ \t]+/.exec(lines[i].text);
+      const lineText = lines[i].text;
+      if (/^%%(\/)?app%%[ \t]*$/.test(lineText) || parsed.ranges.some(r => lines[i].from >= r.start.from && lines[i].to <= r.end.end)) {
+        endIdx = i - 1;
+        break;
+      }
+      const nextHeading = /^(#{1,6})[ \t]+/.exec(lineText);
       if (nextHeading && nextHeading[1].length <= level) {
         endIdx = i - 1;
         break;
       }
     }
+    if (endIdx < curIdx) endIdx = curIdx;
   }
   // 2. Fenced Code Block
   else if (parsed.protectedLines.has(curLine.number) || /^ {0,3}(`{3,}|~{3,})/.test(curLine.text)) {
@@ -202,7 +226,7 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   }
   // 4. Callout / Blockquote
   else if (/^ {0,3}>/.test(curLine.text)) {
-    label = '当前引用/Callout';
+    label = '当前引用块';
     while (startIdx > 0 && /^ {0,3}>/.test(lines[startIdx - 1].text)) {
       startIdx--;
     }
@@ -214,9 +238,10 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   else if (/^(\s*)([-*+]|\d+\.)\s+/.test(curLine.text)) {
     const match = /^(\s*)([-*+]|\d+\.)\s+/.exec(curLine.text)!;
     const baseIndent = match[1].length;
-    label = '当前列表项 (含子项)';
+    label = '当前列表项';
     for (let i = curIdx + 1; i < lines.length; i++) {
       const lineText = lines[i].text;
+      if (/^%%(\/)?app%%[ \t]*$/.test(lineText)) break;
       if (!lineText.trim()) {
         let hasDeeperAhead = false;
         for (let j = i + 1; j < lines.length; j++) {
@@ -240,10 +265,19 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   // 6. Normal Paragraph
   else {
     label = '当前段落';
-    while (startIdx > 0 && lines[startIdx - 1].text.trim() && !/^#{1,6}[ \t]+/.test(lines[startIdx - 1].text) && !/^ {0,3}>/.test(lines[startIdx - 1].text) && !lines[startIdx - 1].text.trim().startsWith('|')) {
+    const isBoundary = (text: string) =>
+      !text.trim() ||
+      /^#{1,6}[ \t]+/.test(text) ||
+      /^ {0,3}>/.test(text) ||
+      (text.trim().startsWith('|') && text.trim().endsWith('|')) ||
+      /^(\s*)([-*+]|\d+\.)\s+/.test(text) ||
+      /^ {0,3}(`{3,}|~{3,})/.test(text) ||
+      /^%%(\/)?app%%[ \t]*$/.test(text);
+
+    while (startIdx > 0 && !isBoundary(lines[startIdx - 1].text)) {
       startIdx--;
     }
-    while (endIdx < lines.length - 1 && lines[endIdx + 1].text.trim() && !/^#{1,6}[ \t]+/.test(lines[endIdx + 1].text) && !/^ {0,3}>/.test(lines[endIdx + 1].text) && !lines[endIdx + 1].text.trim().startsWith('|')) {
+    while (endIdx < lines.length - 1 && !isBoundary(lines[endIdx + 1].text)) {
       endIdx++;
     }
   }
@@ -255,9 +289,7 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   const from = lines[startIdx].from;
   const to = lines[endIdx].end;
 
-  const isEnclosed = parsed.ranges.some(r => from >= r.from && to <= r.to);
-
-  return { from, to, label, isEnclosed };
+  return { from, to, label, isEnclosed: false };
 }
 
 export function toggleCheckboxInSource(sourceText: string, rangeIndex: number, checkboxIndex: number): string | undefined {
