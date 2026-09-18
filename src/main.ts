@@ -340,7 +340,10 @@ class ApplicationView extends ItemView {
 export default class ApplicationPlugin extends Plugin {
   settings: PluginSettings = DEFAULT_SETTINGS;
   private editing = false;
-  private decorations = rangeExtension(() => this.editing);
+  decorations = rangeExtension(
+    () => this.editing,
+    () => this.settings.viewName
+  );
   private leafActions = new Map<WorkspaceLeaf, { showEl: HTMLElement; cleanup: () => void }>();
   private floatingBar?: { el: HTMLElement; countEl: HTMLElement; cleanup: () => void };
 
@@ -805,6 +808,7 @@ class ApplicationSettingTab extends PluginSettingTab {
         .onChange(async value => {
           this.plugin.settings.viewName = value.trim() || '速查版';
           await this.plugin.saveSettings();
+          this.plugin.decorations.refresh();
         }));
   }
 }

@@ -22,7 +22,10 @@ class MarkerBadge extends WidgetType {
   }
 }
 
-export function rangeExtension(isEditing: () => boolean): { extension: Extension; refresh: () => void } {
+export function rangeExtension(
+  isEditing: () => boolean,
+  getViewName: () => string = () => '速查版'
+): { extension: Extension; refresh: () => void } {
   const editors = new Set<EditorView>();
 
   const plugin = ViewPlugin.fromClass(
@@ -82,24 +85,23 @@ export function rangeExtension(isEditing: () => boolean): { extension: Extension
           return;
         }
 
-        // When editing or when there are range errors, reveal markers with clear styling.
-        this.atomic = Decoration.none;
+        // When editing or when there are range errors, replace comment text with clean badge (no raw comment shown).
+        const name = getViewName();
         const decorations = [];
+        const atomicReplacements = [];
 
         for (const marker of this.parsed.markers) {
-          if (!this.view.visibleRanges.some(r => marker.from <= r.to && marker.to >= r.from)) continue;
           const isError = this.parsed.errors.length > 0;
           decorations.push(
             Decoration.line({
               class: isError ? 'app-view-marker-error' : 'app-view-marker-edit'
             }).range(marker.from)
           );
-          decorations.push(
-            Decoration.widget({
-              widget: new MarkerBadge(marker.kind === 'start' ? '速查版开始' : '速查版结束'),
-              side: -1
-            }).range(marker.from)
-          );
+          const replaceDeco = Decoration.replace({
+            widget: new MarkerBadge(marker.kind === 'start' ? `${name}开始` : `${name}结束`)
+          }).range(marker.from, marker.to);
+          decorations.push(replaceDeco);
+          atomicReplacements.push(replaceDeco);
         }
 
         if (editing && !this.parsed.errors.length) {
@@ -116,7 +118,7 @@ export function rangeExtension(isEditing: () => boolean): { extension: Extension
         }
 
         this.decorations = Decoration.set(decorations, true);
-
+        this.atomic = Decoration.set(atomicReplacements, true);
       }
 
       destroy() {
