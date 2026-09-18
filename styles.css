@@ -129,6 +129,16 @@
   user-select: none;
 }
 
+.cm-line.app-view-marker-hidden {
+  display: none !important;
+  height: 0 !important;
+  line-height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  border: none !important;
+}
+
 .app-view-marker-edit {
   color: var(--text-accent);
   background: var(--background-secondary);

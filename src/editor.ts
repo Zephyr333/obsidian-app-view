@@ -6,8 +6,10 @@ import { parseRanges } from './ranges';
 const refresh = StateEffect.define<null>();
 
 class MarkerBadge extends WidgetType {
-  constructor(readonly label: string) {
+  readonly label: string;
+  constructor(label: string) {
     super();
+    this.label = label;
   }
   toDOM(): HTMLElement {
     const badge = document.createElement('span');
@@ -28,8 +30,10 @@ export function rangeExtension(isEditing: () => boolean): { extension: Extension
       decorations: DecorationSet = Decoration.none;
       atomic: DecorationSet = Decoration.none;
       parsed: ReturnType<typeof parseRanges>;
+      readonly view: EditorView;
 
-      constructor(readonly view: EditorView) {
+      constructor(view: EditorView) {
+        this.view = view;
         editors.add(view);
         this.parsed = parseRanges(view.state.doc.toString());
         this.rebuild();
@@ -57,20 +61,21 @@ export function rangeExtension(isEditing: () => boolean): { extension: Extension
         }
 
         const editing = isEditing();
-        const docLength = this.view.state.doc.length;
 
-        // When not editing and no errors, hide markers completely including line breaks.
+        // When not editing and no errors, hide markers completely using line class and in-line replacement.
         if (!editing && !this.parsed.errors.length) {
           const replacements = [];
           for (const marker of this.parsed.markers) {
-            let replaceFrom = marker.from;
-            let replaceTo = marker.end;
-            if (replaceTo === docLength && replaceFrom > 0) {
-              replaceFrom = marker.from - 1;
-            }
-            if (replaceFrom < replaceTo) {
-              replacements.push(Decoration.replace({}).range(replaceFrom, replaceTo));
-            }
+            // Line decoration to hide the entire line height and layout
+            replacements.push(
+              Decoration.line({
+                class: 'app-view-marker-hidden'
+              }).range(marker.from)
+            );
+            // Replace the marker text atomically within the line
+            replacements.push(
+              Decoration.replace({}).range(marker.from, marker.to)
+            );
           }
           this.decorations = Decoration.set(replacements, true);
           this.atomic = this.decorations;
@@ -111,6 +116,7 @@ export function rangeExtension(isEditing: () => boolean): { extension: Extension
         }
 
         this.decorations = Decoration.set(decorations, true);
+
       }
 
       destroy() {
