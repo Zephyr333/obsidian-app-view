@@ -1,0 +1,6 @@
+node_modules/
+main.js
+dist/
+artifacts/
+test-vault/.obsidian/
+test-vault/.trash/
