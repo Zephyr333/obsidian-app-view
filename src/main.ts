@@ -62,6 +62,9 @@ class ApplicationView extends ItemView {
       evt.stopPropagation();
       this.toggleManaging();
     });
+    this.addAction('copy', `复制${this.owner.settings.viewName}纯文本`, async () => {
+      await this.copyContent();
+    });
   }
 
   getViewType() { return VIEW; }
@@ -333,6 +336,20 @@ class ApplicationView extends ItemView {
     }
   }
 
+  async copyContent() {
+    const file = this.app.vault.getAbstractFileByPath(this.path);
+    if (!(file instanceof TFile)) return;
+    const text = await this.owner.sourceText(file);
+    const parsed = parseRanges(text);
+    if (parsed.ranges.length === 0) {
+      new Notice(`当前没有可复制的${this.owner.settings.viewName}内容。`);
+      return;
+    }
+    const cleanContent = parsed.ranges.map(r => r.text.trim()).filter(Boolean).join('\n\n');
+    await navigator.clipboard.writeText(cleanContent);
+    new Notice(`已复制${this.owner.settings.viewName}纯文本到剪贴板`);
+  }
+
   private disposeRendering() { if (this.rendered) this.removeChild(this.rendered); this.rendered = undefined; }
   async onClose() { this.generation++; this.clearTimer(); this.unmountQuickViewFloatingBar(); this.disposeRendering(); }
 }
@@ -394,6 +411,17 @@ export default class ApplicationPlugin extends Plugin {
       editorCallback: () => {
         const view = this.app.workspace.getActiveViewOfType(MarkdownView);
         if (view) this.clearAllRanges(view);
+      }
+    });
+
+    this.addCommand({
+      id: 'copy-application-content',
+      name: `复制当前${this.settings.viewName}纯文本`,
+      checkCallback: checking => {
+        const view = this.app.workspace.getActiveViewOfType(ApplicationView);
+        if (!view) return false;
+        if (!checking) void view.copyContent();
+        return true;
       }
     });
 
