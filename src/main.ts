@@ -82,38 +82,36 @@ class ApplicationView extends FileView {
   }
 
   async onLoadFile(file: TFile) {
-    this.file = file;
-    this.path = file.path;
-    this.lastText = undefined;
-
     if (this.owner.settings.noteStates[file.path] !== 'app') {
-      window.setTimeout(() => {
-        void (async () => {
-          if (this.leaf.view !== this) return;
-          let savedState = this.owner.settings.markdownStates?.[file.path];
-          const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
-          if (!savedState && hasReaderMode) {
-            savedState = { mode: 'preview', source: false };
-          }
-          if (!savedState) {
-            savedState = { mode: 'preview', source: false };
-          }
-          this.owner.setPendingModeRestoration(file.path, savedState);
-          await this.leaf.setViewState({
-            type: 'markdown',
-            state: {
-              file: file.path,
-              mode: savedState.mode,
-              source: savedState.source
-            },
-            active: true
-          });
-          await this.owner.applyMarkdownModeWhenReady(this.leaf, file.path, savedState);
-        })();
-      }, 0);
+      let savedState = this.owner.settings.markdownStates?.[file.path];
+      const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
+      if (!savedState && hasReaderMode) {
+        savedState = { mode: 'preview', source: false };
+      }
+      if (!savedState) {
+        savedState = { mode: 'preview', source: false };
+      }
+      this.owner.setPendingModeRestoration(file.path, savedState);
+      try {
+        await this.leaf.setViewState({
+          type: 'markdown',
+          state: {
+            file: file.path,
+            mode: savedState.mode,
+            source: savedState.source
+          },
+          active: true
+        });
+        await this.owner.applyMarkdownModeWhenReady(this.leaf, file.path, savedState);
+      } catch (e) {
+        console.error('Failed to switch to markdown view:', e);
+      }
       return;
     }
 
+    this.file = file;
+    this.path = file.path;
+    this.lastText = undefined;
     await this.refresh();
   }
 
@@ -700,10 +698,7 @@ export default class ApplicationPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => {
       this.syncActions();
       this.updateFloatingBarHost();
-      if (leaf?.view instanceof ApplicationView && leaf.view.path) {
-        this.settings.noteStates[leaf.view.path] = 'app';
-        void this.saveSettings();
-      } else if (leaf?.view instanceof MarkdownView && leaf.view.file) {
+      if (leaf?.view instanceof MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
         if (this.pendingModeRestorations.has(file.path)) return;
         const mode = leaf.view.getMode();
