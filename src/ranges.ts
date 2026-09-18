@@ -154,8 +154,8 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   const curLine = lines[curIdx];
   if (!curLine.text.trim()) return undefined;
 
-  // Ignore marker lines or YAML frontmatter lines
-  if (/^%%(\/)?app%%[ \t]*$/.test(curLine.text)) return undefined;
+  // Ignore genuine marker lines or YAML frontmatter lines
+  if (parsed.markers.some(m => m.number === curLine.number)) return undefined;
   if (parsed.protectedLines.has(curLine.number) && !/^ {0,3}(`{3,}|~{3,})/.test(curLine.text)) {
     if (lines[0]?.text.replace(/^\uFEFF/, '') === '---') {
       const secondFence = lines.slice(1).findIndex(l => /^(---|\.\.\.)\s*$/.test(l.text));
@@ -167,19 +167,41 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   let endIdx = curIdx;
   let label = '当前段落';
 
-  // 1. Heading (stops before existing markers or next heading of same/higher level)
+  // 1. Heading (stops before existing markers or next heading of same/higher level, tracks code fences)
   const headingMatch = /^(#{1,6})[ \t]+/.exec(curLine.text);
   if (headingMatch) {
     const level = headingMatch[1].length;
     label = '当前章节';
     endIdx = lines.length - 1;
+    let inFence: { char: string; size: number } | undefined;
+
     for (let i = curIdx + 1; i < lines.length; i++) {
-      const lineText = lines[i].text;
-      if (/^%%(\/)?app%%[ \t]*$/.test(lineText) || parsed.ranges.some(r => lines[i].from >= r.start.from && lines[i].to <= r.end.end)) {
+      const line = lines[i];
+
+      // If inside code fence, never break inside it
+      if (inFence) {
+        const close = /^ {0,3}(`+|~+)\s*$/.exec(line.text);
+        if (close && close[1][0] === inFence.char && close[1].length >= inFence.size) {
+          inFence = undefined;
+        }
+        continue;
+      }
+      const openFence = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line.text);
+      if (openFence && !(openFence[1][0] === '`' && openFence[2].includes('`'))) {
+        inFence = { char: openFence[1][0], size: openFence[1].length };
+        continue;
+      }
+
+      // Check genuine markers or ranges
+      const isRealMarker = parsed.markers.some(m => m.number === line.number);
+      const isInsideRange = parsed.ranges.some(r => line.from >= r.start.from && line.to <= r.end.end);
+      if (isRealMarker || isInsideRange) {
         endIdx = i - 1;
         break;
       }
-      const nextHeading = /^(#{1,6})[ \t]+/.exec(lineText);
+
+      // Check next heading of same or higher level
+      const nextHeading = /^(#{1,6})[ \t]+/.exec(line.text);
       if (nextHeading && nextHeading[1].length <= level) {
         endIdx = i - 1;
         break;
@@ -240,9 +262,9 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
     const baseIndent = match[1].length;
     label = '当前列表项';
     for (let i = curIdx + 1; i < lines.length; i++) {
-      const lineText = lines[i].text;
-      if (/^%%(\/)?app%%[ \t]*$/.test(lineText)) break;
-      if (!lineText.trim()) {
+      const line = lines[i];
+      if (parsed.markers.some(m => m.number === line.number)) break;
+      if (!line.text.trim()) {
         let hasDeeperAhead = false;
         for (let j = i + 1; j < lines.length; j++) {
           if (lines[j].text.trim()) {
@@ -254,7 +276,7 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
         if (hasDeeperAhead) continue;
         else break;
       }
-      const nextIndent = /^\s*/.exec(lineText)?.[0].length ?? 0;
+      const nextIndent = /^\s*/.exec(line.text)?.[0].length ?? 0;
       if (nextIndent > baseIndent) {
         endIdx = i;
       } else {
@@ -265,19 +287,20 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   // 6. Normal Paragraph
   else {
     label = '当前段落';
-    const isBoundary = (text: string) =>
-      !text.trim() ||
-      /^#{1,6}[ \t]+/.test(text) ||
-      /^ {0,3}>/.test(text) ||
-      (text.trim().startsWith('|') && text.trim().endsWith('|')) ||
-      /^(\s*)([-*+]|\d+\.)\s+/.test(text) ||
-      /^ {0,3}(`{3,}|~{3,})/.test(text) ||
-      /^%%(\/)?app%%[ \t]*$/.test(text);
+    const isBoundaryLine = (l: Line) =>
+      !l.text.trim() ||
+      parsed.markers.some(m => m.number === l.number) ||
+      parsed.protectedLines.has(l.number) ||
+      /^#{1,6}[ \t]+/.test(l.text) ||
+      /^ {0,3}>/.test(l.text) ||
+      (l.text.trim().startsWith('|') && l.text.trim().endsWith('|')) ||
+      /^(\s*)([-*+]|\d+\.)\s+/.test(l.text) ||
+      /^ {0,3}(`{3,}|~{3,})/.test(l.text);
 
-    while (startIdx > 0 && !isBoundary(lines[startIdx - 1].text)) {
+    while (startIdx > 0 && !isBoundaryLine(lines[startIdx - 1])) {
       startIdx--;
     }
-    while (endIdx < lines.length - 1 && !isBoundary(lines[endIdx + 1].text)) {
+    while (endIdx < lines.length - 1 && !isBoundaryLine(lines[endIdx + 1])) {
       endIdx++;
     }
   }

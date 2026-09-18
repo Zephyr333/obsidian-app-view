@@ -118,3 +118,17 @@ test('removeSpecificRangeEdit removes target range by bounds', () => {
   assert.ok(!result.includes('%%app%%\n段落二'));
 });
 
+test('detectBlockAt includes full code fences even if they contain marker-like text', () => {
+  const doc = '## 自己试一试\n\n文字说明\n\n```markdown\n%%app%%\n代码示例\n%%/app%%\n```\n';
+  const block = detectBlockAt(doc, doc.indexOf('## 自己试一试'));
+  assert.ok(block);
+  assert.equal(block.label, '当前章节');
+  assert.equal(doc.slice(block.from, block.to), doc);
+
+  // Adding this range must not throw '选区截断了代码块或注释'
+  const edit = addRangeEdit(doc, block.from, block.to);
+  const result = apply(doc, edit);
+  const parsed = parseRanges(result);
+  assert.equal(parsed.errors.length, 0);
+  assert.equal(parsed.ranges.length, 1);
+});
