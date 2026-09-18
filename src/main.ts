@@ -417,7 +417,7 @@ export default class ApplicationPlugin extends Plugin {
   );
   private leafActions = new Map<WorkspaceLeaf, { showEl: HTMLElement; cleanup: () => void }>();
   private floatingBar?: { el: HTMLElement; countEl: HTMLElement; cleanup: () => void };
-  private isRestoringMode = false;
+  private pendingModeRestorations = new Map<string, MarkdownState>();
 
   isEditing() {
     return this.editing;
@@ -579,8 +579,16 @@ export default class ApplicationPlugin extends Plugin {
 
     // State persistence on opening notes
     this.registerEvent(this.app.workspace.on('file-open', async file => {
-      if (this.isRestoringMode) return;
       if (!(file instanceof TFile) || file.extension !== 'md') return;
+
+      const pending = this.pendingModeRestorations.get(file.path);
+      if (pending) {
+        const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+        if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
+          await this.applyMarkdownModeWhenReady(activeLeaf, file.path, pending);
+          return;
+        }
+      }
 
       const allLeaves = this.app.workspace.getLeavesOfType('markdown').concat(this.app.workspace.getLeavesOfType(VIEW));
       const leavesForFile = allLeaves.filter(leaf => {
@@ -605,21 +613,18 @@ export default class ApplicationPlugin extends Plugin {
           await this.saveSettings();
         }
       } else {
-        const savedState = this.settings.markdownStates?.[file.path];
+        let savedState = this.settings.markdownStates?.[file.path];
+        const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
+        if (!savedState && hasReaderMode) {
+          savedState = { mode: 'preview', source: false };
+        }
         if (savedState) {
           const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
           if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
             const currentMode = activeLeaf.view.getMode();
             const currentSource = (activeLeaf.view.getState() as any)?.source ?? false;
             if (currentMode !== savedState.mode || (savedState.mode === 'source' && currentSource !== savedState.source)) {
-              this.isRestoringMode = true;
-              try {
-                await this.restoreMarkdownMode(activeLeaf, savedState);
-              } finally {
-                setTimeout(() => {
-                  this.isRestoringMode = false;
-                }, 300);
-              }
+              await this.applyMarkdownModeWhenReady(activeLeaf, file.path, savedState);
             }
           }
         }
@@ -628,10 +633,10 @@ export default class ApplicationPlugin extends Plugin {
 
     this.registerEvent(this.app.workspace.on('layout-change', () => {
       this.syncActions();
-      if (this.isRestoringMode) return;
       const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
       if (activeLeaf?.view instanceof MarkdownView && activeLeaf.view.file) {
         const file = activeLeaf.view.file;
+        if (this.pendingModeRestorations.has(file.path)) return;
         const mode = activeLeaf.view.getMode();
         const source = (activeLeaf.view.getState() as any)?.source ?? false;
         if (!this.settings.markdownStates) this.settings.markdownStates = {};
@@ -643,12 +648,12 @@ export default class ApplicationPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => {
       this.syncActions();
       this.updateFloatingBarHost();
-      if (this.isRestoringMode) return;
       if (leaf?.view instanceof ApplicationView && leaf.view.path) {
         this.settings.noteStates[leaf.view.path] = 'app';
         void this.saveSettings();
       } else if (leaf?.view instanceof MarkdownView && leaf.view.file) {
         const file = leaf.view.file;
+        if (this.pendingModeRestorations.has(file.path)) return;
         const mode = leaf.view.getMode();
         const source = (leaf.view.getState() as any)?.source ?? false;
         if (!this.settings.markdownStates) this.settings.markdownStates = {};
@@ -733,7 +738,7 @@ export default class ApplicationPlugin extends Plugin {
     const active = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (active && active.file?.path === path) {
       if (active.getMode() !== 'source') {
-        await this.restoreMarkdownMode(active.leaf, { mode: 'source', source: false });
+        await this.applyMarkdownModeWhenReady(active.leaf, path, { mode: 'source', source: false });
       }
       const pos = active.editor.offsetToPos(offset);
       active.editor.setCursor(pos);
@@ -769,87 +774,95 @@ export default class ApplicationPlugin extends Plugin {
     this.settings.noteStates[file.path] = 'detail';
     await this.saveSettings();
 
-    const savedState = this.settings.markdownStates?.[file.path] ?? { mode: 'source', source: false };
-    this.isRestoringMode = true;
-    try {
-      await targetLeaf.setViewState({
-        type: 'markdown',
-        state: {
-          file: file.path,
-          mode: savedState.mode,
-          source: savedState.source
-        },
-        active: true
-      });
-      await this.app.workspace.revealLeaf(targetLeaf);
-      this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-
-      await this.restoreMarkdownMode(targetLeaf, savedState);
-    } finally {
-      setTimeout(() => {
-        this.isRestoringMode = false;
-      }, 300);
+    let savedState = this.settings.markdownStates?.[file.path];
+    const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
+    if (!savedState || (hasReaderMode && savedState.mode !== 'preview')) {
+      if (hasReaderMode) {
+        const content = await this.app.vault.cachedRead(file);
+        const hasBody = content.replace(/^---\s*\n[\s\S]*?\n---\s*\n*/, '').trim().length > 0;
+        if (hasBody) {
+          savedState = { mode: 'preview', source: false };
+        }
+      }
     }
+    if (!savedState) {
+      savedState = { mode: 'preview', source: false };
+    }
+
+    this.pendingModeRestorations.set(file.path, savedState);
+
+    await targetLeaf.setViewState({
+      type: 'markdown',
+      state: {
+        file: file.path,
+        mode: savedState.mode,
+        source: savedState.source
+      },
+      active: true
+    });
+    await this.app.workspace.revealLeaf(targetLeaf);
+    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+
+    await this.applyMarkdownModeWhenReady(targetLeaf, file.path, savedState);
   }
 
-  private async restoreMarkdownMode(leaf: WorkspaceLeaf, targetState: MarkdownState): Promise<void> {
-    const applyMode = async () => {
-      if (!(leaf.view instanceof MarkdownView)) return false;
-      const view = leaf.view;
-      const targetMode = targetState.mode;
-      const targetSource = targetMode === 'source' ? (targetState.source ?? false) : false;
+  private async applyMarkdownModeWhenReady(leaf: WorkspaceLeaf, filePath: string, targetState: MarkdownState): Promise<void> {
+    const targetMode = targetState.mode;
+    const targetSource = targetMode === 'source' ? (targetState.source ?? false) : false;
 
-      const currentMode = view.getMode();
-      const currentSource = (view.getState() as any)?.source ?? false;
-      if (currentMode === targetMode && (targetMode !== 'source' || currentSource === targetSource)) {
-        return true;
-      }
+    for (let attempt = 0; attempt < 15; attempt++) {
+      if (leaf.view instanceof MarkdownView && leaf.view.file?.path === filePath) {
+        const view = leaf.view;
+        const currentMode = view.getMode();
+        const currentSource = (view.getState() as any)?.source ?? false;
 
-      // 1. Try view.setState
-      try {
-        const cur = view.getState();
-        await view.setState({
-          ...cur,
-          mode: targetMode,
-          source: targetSource
-        }, { history: false });
-      } catch (e) {
-        console.warn('view.setState failed:', e);
-      }
+        if (currentMode !== targetMode || (targetMode === 'source' && currentSource !== targetSource)) {
+          // 1. leaf.setViewState
+          try {
+            const vs = leaf.getViewState();
+            if (vs?.state) {
+              vs.state.mode = targetMode;
+              vs.state.source = targetSource;
+              await leaf.setViewState(vs);
+            }
+          } catch (e) {
+            console.warn('leaf.setViewState error:', e);
+          }
 
-      // 2. Try leaf.setViewState
-      try {
-        const vs = leaf.getViewState();
-        if (vs?.state) {
-          vs.state.mode = targetMode;
-          vs.state.source = targetSource;
-          await leaf.setViewState(vs);
-        }
-      } catch (e) {
-        console.warn('leaf.setViewState failed:', e);
-      }
+          // 2. view.setState
+          try {
+            if (leaf.view instanceof MarkdownView) {
+              const st = leaf.view.getState();
+              await leaf.view.setState({
+                ...st,
+                mode: targetMode,
+                source: targetSource
+              }, { history: false });
+            }
+          } catch (e) {
+            console.warn('view.setState error:', e);
+          }
 
-      // 3. Fallback to toggle commands if mode still doesn't match
-      if (leaf.view instanceof MarkdownView) {
-        if (leaf.view.getMode() !== targetMode) {
-          (this.app as any).commands?.executeCommandById('markdown:toggle-preview');
-        }
-        if (targetMode === 'source') {
-          const actualSource = (leaf.view.getState() as any)?.source ?? false;
-          if (actualSource !== targetSource) {
-            (this.app as any).commands?.executeCommandById('markdown:toggle-live-preview');
+          // 3. Fallback to command
+          if (leaf.view instanceof MarkdownView && leaf.view.getMode() !== targetMode) {
+            this.app.workspace.setActiveLeaf(leaf, { focus: true });
+            (this.app as any).commands?.executeCommandById('markdown:toggle-preview');
           }
         }
+
+        if (leaf.view instanceof MarkdownView && leaf.view.getMode() === targetMode) {
+          if (!this.settings.markdownStates) this.settings.markdownStates = {};
+          this.settings.markdownStates[filePath] = { mode: targetMode, source: targetSource };
+          await this.saveSettings();
+          this.pendingModeRestorations.delete(filePath);
+          return;
+        }
       }
 
-      return leaf.view instanceof MarkdownView && leaf.view.getMode() === targetMode;
-    };
-
-    const success = await applyMode();
-    if (!success) {
-      await new Promise(resolve => setTimeout(resolve, 50));
-      await applyMode();
+      await new Promise(resolve => setTimeout(resolve, 40));
     }
+
+    this.pendingModeRestorations.delete(filePath);
   }
 
   private apply(editor: Editor, operation: () => TextEdit) {
