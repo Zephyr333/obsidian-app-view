@@ -11,12 +11,21 @@ import {
   PluginSettingTab,
   Setting,
   TFile,
+  setIcon,
   type Editor,
   type ViewStateResult,
   type WorkspaceLeaf
 } from 'obsidian';
 import { rangeExtension } from './editor';
-import { addRangeEdit, parseRanges, removeRangeEdit, type TextEdit } from './ranges';
+import {
+  addRangeEdit,
+  detectBlockAt,
+  parseRanges,
+  removeRangeEdit,
+  removeSpecificRangeEdit,
+  toggleCheckboxInSource,
+  type TextEdit
+} from './ranges';
 
 const VIEW = 'app-view';
 
@@ -39,17 +48,19 @@ class ApplicationView extends ItemView {
   private body!: HTMLElement;
   private timer?: number;
   private timerWindow?: Window;
+  private targetScrollOffset?: number;
+  private managing = false;
+  private floatingBar?: { el: HTMLElement; cleanup: () => void };
 
   constructor(leaf: WorkspaceLeaf, private readonly owner: ApplicationPlugin) {
     super(leaf);
-    const backActionEl = this.addAction('file-text', '左键：返回详细版 | 右键：返回并调整范围', (evt: MouseEvent) => {
+    const backActionEl = this.addAction('file-text', '左键：返回详细版 | 右键：管理速查版', (evt: MouseEvent) => {
       void this.owner.openSource(this.path, evt, this.leaf);
     });
-    backActionEl.addEventListener('contextmenu', async (evt: MouseEvent) => {
+    backActionEl.addEventListener('contextmenu', (evt: MouseEvent) => {
       evt.preventDefault();
       evt.stopPropagation();
-      await this.owner.openSource(this.path, undefined, this.leaf);
-      if (!this.owner.isEditing()) this.owner.toggleRanges();
+      this.toggleManaging();
     });
   }
 
@@ -62,6 +73,9 @@ class ApplicationView extends ItemView {
   getState() { return { path: this.path }; }
   async setState(state: unknown, result: ViewStateResult) {
     if (state && typeof state === 'object' && 'path' in state && typeof state.path === 'string') this.path = state.path;
+    if (state && typeof state === 'object' && 'targetOffset' in state && typeof state.targetOffset === 'number') {
+      this.targetScrollOffset = state.targetOffset;
+    }
     this.lastText = undefined;
     await super.setState(state, result);
     await this.refresh();
@@ -75,14 +89,40 @@ class ApplicationView extends ItemView {
     this.heading = this.contentEl.createEl('div', { cls: 'inline-title' });
     this.body = this.contentEl.createDiv({ cls: 'app-view-body' });
 
-    this.registerDomEvent(this.body, 'click', (event: MouseEvent) => {
-      const target = event.target as Node | null;
-      if (target?.instanceOf(Element) && target.closest('input, textarea, select, [contenteditable="true"]')) {
+    this.registerDomEvent(this.body, 'click', async (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      // 1. Task Checkbox toggle and write back to source
+      if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+        const section = target.closest<HTMLElement>('.app-view-section');
+        if (!section) return;
+        const rangeIndex = parseInt(section.dataset.rangeIndex ?? '-1', 10);
+        if (rangeIndex === -1) return;
+
+        const allCheckboxes = Array.from(section.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+        const checkboxIndex = allCheckboxes.indexOf(target);
+        if (checkboxIndex === -1) return;
+
+        const file = this.app.vault.getAbstractFileByPath(this.path);
+        if (file instanceof TFile) {
+          await this.app.vault.process(file, content => {
+            const updated = toggleCheckboxInSource(content, rangeIndex, checkboxIndex);
+            return updated ?? content;
+          });
+        }
+        return;
+      }
+
+      // 2. Prevent arbitrary form inputs
+      if (target.closest('textarea, select, [contenteditable="true"]')) {
         event.preventDefault();
         event.stopImmediatePropagation();
         return;
       }
-      const link = target?.instanceOf(Element) ? target.closest('a.internal-link') : null;
+
+      // 3. Internal link jump
+      const link = target.closest('a.internal-link');
       const href = link?.getAttribute('data-href') ?? link?.getAttribute('href');
       if (href) {
         event.preventDefault();
@@ -90,6 +130,18 @@ class ApplicationView extends ItemView {
         void this.app.workspace.openLinkText(href, this.path, Keymap.isModEvent(event));
       }
     }, { capture: true });
+
+    // 4. Link hover preview parity
+    this.registerDomEvent(this.body, 'mouseover', (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null;
+      const link = target?.closest<HTMLAnchorElement>('a.internal-link');
+      if (link) {
+        const href = link.getAttribute('data-href') ?? link.getAttribute('href');
+        if (href) {
+          this.app.workspace.trigger('link-hover', this, link, href, this.path);
+        }
+      }
+    });
 
     await this.refresh();
   }
@@ -101,6 +153,68 @@ class ApplicationView extends ItemView {
   }
 
   private clearTimer() { if (this.timer !== undefined) this.timerWindow?.clearTimeout(this.timer); this.timer = undefined; }
+
+  toggleManaging() {
+    this.managing = !this.managing;
+    this.contentEl.toggleClass('is-managing', this.managing);
+    if (this.managing) {
+      this.mountQuickViewFloatingBar();
+    } else {
+      this.unmountQuickViewFloatingBar();
+    }
+  }
+
+  private mountQuickViewFloatingBar() {
+    this.unmountQuickViewFloatingBar();
+    const bar = this.containerEl.createDiv({ cls: 'app-view-floating-bar' });
+    bar.createSpan({ cls: 'app-view-floating-label', text: `${this.owner.settings.viewName}管理中` });
+
+    const parsed = parseRanges(this.lastText ?? '');
+    bar.createSpan({ cls: 'app-view-floating-count', text: `共 ${parsed.ranges.length} 段` });
+
+    const addBtn = bar.createEl('button', { cls: 'app-view-floating-btn', text: '去详细版添加内容' });
+    const clearBtn = bar.createEl('button', { cls: 'app-view-floating-btn', text: '清空全部标记' });
+    const doneBtn = bar.createEl('button', { cls: 'app-view-floating-btn mod-cta', text: '完成管理 (Esc)' });
+
+    for (const btn of [addBtn, clearBtn]) {
+      btn.addEventListener('mousedown', e => e.preventDefault());
+    }
+    addBtn.addEventListener('click', async () => {
+      this.toggleManaging();
+      await this.owner.openSource(this.path, undefined, this.leaf);
+      if (!this.owner.isEditing()) this.owner.toggleRanges();
+    });
+    clearBtn.addEventListener('click', async () => {
+      const file = this.app.vault.getAbstractFileByPath(this.path);
+      if (file instanceof TFile) {
+        await this.owner.clearAllRangesInFile(file);
+      }
+    });
+    doneBtn.addEventListener('click', () => this.toggleManaging());
+
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        this.toggleManaging();
+      }
+    };
+    this.containerEl.ownerDocument.addEventListener('keydown', onKeydown);
+
+    this.floatingBar = {
+      el: bar,
+      cleanup: () => {
+        this.containerEl.ownerDocument.removeEventListener('keydown', onKeydown);
+        bar.remove();
+      }
+    };
+  }
+
+  private unmountQuickViewFloatingBar() {
+    if (this.floatingBar) {
+      this.floatingBar.cleanup();
+      this.floatingBar = undefined;
+    }
+  }
 
   async refresh() {
     if (!this.body) return;
@@ -148,13 +262,43 @@ class ApplicationView extends ItemView {
           text: `未收录任何${this.owner.settings.viewName}内容。在详细版中选中内容，右键点击“加入${this.owner.settings.viewName}”。`
         });
       } else {
-        for (const range of parsed.ranges) {
+        for (const [index, range] of parsed.ranges.entries()) {
           if (!range.text.trim()) continue;
           const section = staging.createEl('section', { cls: 'app-view-section' });
+          section.dataset.rangeIndex = String(index);
+          section.dataset.from = String(range.from);
+          section.dataset.to = String(range.to);
+
+          // Management header with delete button
+          const manageHeader = section.createDiv({ cls: 'app-view-manage-header' });
+          manageHeader.createSpan({ cls: 'app-view-manage-badge', text: `段落 ${index + 1}` });
+          const delBtn = manageHeader.createEl('button', { cls: 'app-view-manage-del', text: '移除本段' });
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            void this.owner.removeRangeAt(this.path, range.from, range.to);
+          });
+
+          // Bidirectional locate button
+          const locateBtn = section.createEl('button', {
+            cls: 'app-view-locate-btn',
+            attr: { 'aria-label': '定位到详细版对应位置' }
+          });
+          setIcon(locateBtn, 'arrow-up-right');
+          locateBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            void this.owner.jumpToSource(this.path, range.from, this.leaf);
+          });
+
+          section.addEventListener('dblclick', (e) => {
+            const target = e.target as HTMLElement;
+            if (!target.closest('button, a, input')) {
+              void this.owner.jumpToSource(this.path, range.from, this.leaf);
+            }
+          });
+
           await MarkdownRenderer.render(this.app, range.text, section, file.path, component);
           if (generation !== this.generation) { this.removeChild(component); return; }
         }
-        for (const checkbox of Array.from(staging.querySelectorAll<HTMLInputElement>('input'))) checkbox.disabled = true;
         for (const editable of Array.from(staging.querySelectorAll<HTMLElement>('[contenteditable]'))) editable.setAttribute('contenteditable', 'false');
       }
 
@@ -163,7 +307,23 @@ class ApplicationView extends ItemView {
       this.rendered = component;
       this.body.replaceChildren(...Array.from(staging.childNodes));
       this.lastText = text;
-      this.contentEl.scrollTop = scroll;
+
+      // Scroll to target offset if requested
+      if (this.targetScrollOffset !== undefined) {
+        const targetOffset = this.targetScrollOffset;
+        this.targetScrollOffset = undefined;
+        const sections = Array.from(this.body.querySelectorAll<HTMLElement>('.app-view-section'));
+        const match = sections.find(s => {
+          const from = parseInt(s.dataset.from ?? '0', 10);
+          const to = parseInt(s.dataset.to ?? '0', 10);
+          return targetOffset >= from && targetOffset <= to;
+        }) ?? sections[0];
+        if (match) {
+          match.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      } else {
+        this.contentEl.scrollTop = scroll;
+      }
     } catch {
       this.removeChild(component);
       if (generation === this.generation) {
@@ -174,7 +334,7 @@ class ApplicationView extends ItemView {
   }
 
   private disposeRendering() { if (this.rendered) this.removeChild(this.rendered); this.rendered = undefined; }
-  async onClose() { this.generation++; this.clearTimer(); this.disposeRendering(); }
+  async onClose() { this.generation++; this.clearTimer(); this.unmountQuickViewFloatingBar(); this.disposeRendering(); }
 }
 
 export default class ApplicationPlugin extends Plugin {
@@ -246,7 +406,8 @@ export default class ApplicationPlugin extends Plugin {
 
     this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor) => {
       const hasSelection = editor.somethingSelected();
-      const parsed = parseRanges(editor.getValue());
+      const text = editor.getValue();
+      const parsed = parseRanges(text);
 
       menu.addSeparator();
       if (hasSelection) {
@@ -269,14 +430,22 @@ export default class ApplicationPlugin extends Plugin {
         }
       } else {
         const cursorOffset = editor.posToOffset(editor.getCursor());
-        const insideRange = parsed.ranges.some(r => cursorOffset >= r.from && cursorOffset <= r.to);
+        const block = detectBlockAt(text, cursorOffset);
 
-        if (insideRange) {
-          menu.addItem(item =>
-            item.setTitle(`移除${this.settings.viewName}`)
-              .setIcon('minus-circle')
-              .onClick(() => this.exclude(editor))
-          );
+        if (block) {
+          if (block.isEnclosed) {
+            menu.addItem(item =>
+              item.setTitle(`移除${this.settings.viewName}`)
+                .setIcon('minus-circle')
+                .onClick(() => this.exclude(editor))
+            );
+          } else {
+            menu.addItem(item =>
+              item.setTitle(`加入${block.label}`)
+                .setIcon('plus-circle')
+                .onClick(() => this.includeRange(editor, block.from, block.to))
+            );
+          }
         }
         menu.addItem(item =>
           item.setTitle(this.editing ? `退出${this.settings.viewName}调整` : `调整${this.settings.viewName}范围`)
@@ -320,6 +489,17 @@ export default class ApplicationPlugin extends Plugin {
     // State persistence on opening notes
     this.registerEvent(this.app.workspace.on('file-open', async file => {
       if (!(file instanceof TFile) || file.extension !== 'md') return;
+
+      const allLeaves = this.app.workspace.getLeavesOfType('markdown').concat(this.app.workspace.getLeavesOfType(VIEW));
+      const leavesForFile = allLeaves.filter(leaf => {
+        if (leaf.view instanceof MarkdownView) return leaf.view.file?.path === file.path;
+        if (leaf.view instanceof ApplicationView) return leaf.view.path === file.path;
+        return false;
+      });
+
+      // If more than 1 leaf exists for this file (e.g. split view or existing tabs), preserve layout
+      if (leavesForFile.length > 1) return;
+
       if (this.settings.noteStates[file.path] === 'app') {
         const text = await this.sourceText(file);
         const parsed = parseRanges(text);
@@ -336,9 +516,16 @@ export default class ApplicationPlugin extends Plugin {
     }));
 
     this.registerEvent(this.app.workspace.on('layout-change', () => this.syncActions()));
-    this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => {
       this.syncActions();
       this.updateFloatingBarHost();
+      if (leaf?.view instanceof ApplicationView && leaf.view.path) {
+        this.settings.noteStates[leaf.view.path] = 'app';
+        void this.saveSettings();
+      } else if (leaf?.view instanceof MarkdownView && leaf.view.file) {
+        this.settings.noteStates[leaf.view.file.path] = 'detail';
+        void this.saveSettings();
+      }
     }));
     this.app.workspace.onLayoutReady(() => {
       this.syncActions();
@@ -380,16 +567,48 @@ export default class ApplicationPlugin extends Plugin {
     return currentLeaf;
   }
 
-  async openApplication(file: TFile, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf) {
+  async openApplication(file: TFile, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf, targetOffset?: number) {
     const activeLeaf = fromLeaf ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf ?? this.app.workspace.getLeaf(false);
     const targetLeaf = evt ? this.resolveTargetLeaf(evt, activeLeaf) : activeLeaf;
 
     this.settings.noteStates[file.path] = 'app';
     await this.saveSettings();
 
-    await targetLeaf.setViewState({ type: VIEW, state: { path: file.path }, active: true });
+    await targetLeaf.setViewState({
+      type: VIEW,
+      state: { path: file.path, targetOffset },
+      active: true
+    });
     await this.app.workspace.revealLeaf(targetLeaf);
     this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+  }
+
+  async jumpToSource(path: string, offset: number, fromLeaf?: WorkspaceLeaf) {
+    await this.openSource(path, undefined, fromLeaf);
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (active && active.file?.path === path) {
+      const pos = active.editor.offsetToPos(offset);
+      active.editor.setCursor(pos);
+      active.editor.scrollIntoView({ from: pos, to: pos }, true);
+      active.editor.focus();
+    }
+  }
+
+  async removeRangeAt(path: string, rangeFrom: number, rangeTo: number) {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (!(file instanceof TFile)) return;
+    await this.app.vault.process(file, text => {
+      const edit = removeSpecificRangeEdit(text, rangeFrom, rangeTo);
+      return text.slice(0, edit.from) + edit.text + text.slice(edit.to);
+    });
+    new Notice(`已从${this.settings.viewName}移除该段。`);
+  }
+
+  async clearAllRangesInFile(file: TFile) {
+    await this.app.vault.process(file, text => {
+      return text.replace(/%%app%%[\r\n]*/g, '').replace(/[\r\n]*%%\/app%%/g, '');
+    });
+    new Notice(`已清空所有${this.settings.viewName}标记。`);
   }
 
   async openSource(path: string, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf) {
@@ -416,6 +635,11 @@ export default class ApplicationPlugin extends Plugin {
 
   private include(editor: Editor) {
     this.apply(editor, () => addRangeEdit(editor.getValue(), editor.posToOffset(editor.getCursor('from')), editor.posToOffset(editor.getCursor('to'))));
+    this.updateFloatingBar();
+  }
+
+  includeRange(editor: Editor, from: number, to: number) {
+    this.apply(editor, () => addRangeEdit(editor.getValue(), from, to));
     this.updateFloatingBar();
   }
 
@@ -463,7 +687,10 @@ export default class ApplicationPlugin extends Plugin {
       if (!(view instanceof MarkdownView)) continue;
 
       const showEl = view.addAction('zap', `左键：查看${this.settings.viewName} | 右键：调整范围`, (evt: MouseEvent) => {
-        if (view.file) void this.openApplication(view.file, evt, leaf);
+        if (view.file) {
+          const cursorOffset = view.editor.posToOffset(view.editor.getCursor());
+          void this.openApplication(view.file, evt, leaf, cursorOffset);
+        }
       });
 
       const onContextMenu = (evt: MouseEvent) => {

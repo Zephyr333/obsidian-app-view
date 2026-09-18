@@ -30,6 +30,11 @@
   font-style: italic;
 }
 
+.app-view-section {
+  position: relative;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
 .app-view-section + .app-view-section {
   margin-top: var(--size-4-6);
 }
@@ -43,8 +48,83 @@
   overflow-x: auto;
 }
 
-.app-view-section input {
-  pointer-events: none;
+.app-view-section input[type="checkbox"] {
+  pointer-events: auto !important;
+  cursor: pointer;
+}
+
+.app-view-locate-btn {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  opacity: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: var(--radius-s);
+  transition: opacity 0.15s ease, color 0.15s ease, background-color 0.15s ease;
+  z-index: 5;
+}
+
+.app-view-section:hover .app-view-locate-btn {
+  opacity: 0.6;
+}
+
+.app-view-locate-btn:hover {
+  opacity: 1 !important;
+  color: var(--text-accent);
+  background-color: var(--background-modifier-hover);
+}
+
+.is-mobile .app-view-locate-btn {
+  opacity: 0.6;
+}
+
+/* In-Quick-View Management Mode */
+.is-managing .app-view-section {
+  padding: var(--size-4-3) var(--size-4-4);
+  margin-block: var(--size-4-4);
+  border-radius: var(--radius-m);
+  border: 1.5px dashed var(--interactive-accent);
+  background: var(--background-secondary);
+}
+
+.app-view-manage-header {
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--size-4-2);
+  padding-bottom: var(--size-4-1);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.is-managing .app-view-manage-header {
+  display: flex;
+}
+
+.app-view-manage-badge {
+  font-size: var(--font-smallest);
+  font-weight: var(--font-semibold);
+  color: var(--text-accent);
+}
+
+.app-view-manage-del {
+  font-size: var(--font-ui-smaller);
+  color: var(--text-error);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.app-view-manage-del:hover {
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent, #fff);
 }
 
 /* Floating Action Bar during Range Adjustment */

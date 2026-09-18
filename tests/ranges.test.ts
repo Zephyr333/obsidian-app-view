@@ -1,6 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseRanges, addRangeEdit, removeRangeEdit, type TextEdit } from '../src/ranges';
+import {
+  parseRanges,
+  addRangeEdit,
+  removeRangeEdit,
+  removeSpecificRangeEdit,
+  detectBlockAt,
+  toggleCheckboxInSource,
+  type TextEdit
+} from '../src/ranges';
 const apply = (text: string, edit: TextEdit) => text.slice(0, edit.from) + edit.text + text.slice(edit.to);
 
 test('collects headings, multi-line lists and paragraphs in source order', () => {
@@ -57,3 +65,44 @@ test('a complete range remains valid at EOF without final newline', () => {
   assert.deepEqual(result.errors, []);
   assert.equal(result.ranges.length, 1);
 });
+
+test('detectBlockAt detects heading hierarchy', () => {
+  const doc = '# 顶层标题\n引言\n## 二级标题\n内容1\n### 三级\n内容2\n## 另一个二级\n';
+  const block = detectBlockAt(doc, doc.indexOf('## 二级标题'));
+  assert.ok(block);
+  assert.ok(block.label.includes('2级标题'));
+  assert.equal(doc.slice(block.from, block.to), '## 二级标题\n内容1\n### 三级\n内容2\n');
+});
+
+test('detectBlockAt detects nested lists and callouts', () => {
+  const doc = '- 父项\n  - 子项1\n  - 子项2\n- 另一个父项\n\n> [!note]\n> 引用第一行\n> 引用第二行\n\n普通段落';
+  const listBlock = detectBlockAt(doc, doc.indexOf('父项'));
+  assert.ok(listBlock);
+  assert.equal(doc.slice(listBlock.from, listBlock.to), '- 父项\n  - 子项1\n  - 子项2\n');
+
+  const calloutBlock = detectBlockAt(doc, doc.indexOf('引用第一行'));
+  assert.ok(calloutBlock);
+  assert.equal(doc.slice(calloutBlock.from, calloutBlock.to), '> [!note]\n> 引用第一行\n> 引用第二行\n');
+});
+
+test('toggleCheckboxInSource toggles between unchecked and checked', () => {
+  const doc = '前言\n%%app%%\n- [ ] 待办一\n- [x] 待办二\n%%/app%%\n后记';
+  const updated1 = toggleCheckboxInSource(doc, 0, 0);
+  assert.ok(updated1);
+  assert.ok(updated1.includes('- [x] 待办一'));
+
+  const updated2 = toggleCheckboxInSource(doc, 0, 1);
+  assert.ok(updated2);
+  assert.ok(updated2.includes('- [ ] 待办二'));
+});
+
+test('removeSpecificRangeEdit removes target range by bounds', () => {
+  const doc = '%%app%%\n段落一\n%%/app%%\n%%app%%\n段落二\n%%/app%%';
+  const parsed = parseRanges(doc);
+  const r2 = parsed.ranges[1];
+  const edit = removeSpecificRangeEdit(doc, r2.from, r2.to);
+  const result = apply(doc, edit);
+  assert.equal(parseRanges(result).ranges.length, 1);
+  assert.ok(!result.includes('%%app%%\n段落二'));
+});
+

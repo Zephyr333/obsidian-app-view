@@ -114,3 +114,169 @@ export function removeRangeEdit(text: string, offset: number): TextEdit {
   if (!range) throw new Error('请把光标放在需要取消的应用范围内。');
   return { from: range.start.from, to: range.end.end, text: range.text };
 }
+
+export function removeSpecificRangeEdit(text: string, rangeFrom: number, rangeTo: number): TextEdit {
+  const parsed = parseRanges(text);
+  if (parsed.errors.length) throw new Error(parsed.errors[0]);
+  const range = parsed.ranges.find(r => r.from === rangeFrom && r.to === rangeTo)
+    ?? parsed.ranges.find(r => rangeFrom >= r.start.from && rangeTo <= r.end.end);
+  if (!range) throw new Error('未找到要移除的标记范围。');
+  return { from: range.start.from, to: range.end.end, text: range.text };
+}
+
+export interface DetectedBlock {
+  from: number;
+  to: number;
+  label: string;
+  isEnclosed: boolean;
+}
+
+export function detectBlockAt(text: string, offset: number): DetectedBlock | undefined {
+  const lines = linesOf(text);
+  if (lines.length === 0) return undefined;
+  const parsed = parseRanges(text);
+
+  let curIdx = lines.findIndex(l => offset >= l.from && offset <= l.to);
+  if (curIdx === -1) {
+    if (offset >= text.length && lines.length > 0) curIdx = lines.length - 1;
+    else return undefined;
+  }
+
+  const curLine = lines[curIdx];
+  if (!curLine.text.trim()) return undefined;
+
+  let startIdx = curIdx;
+  let endIdx = curIdx;
+  let label = '当前段落';
+
+  // 1. Heading
+  const headingMatch = /^(#{1,6})[ \t]+/.exec(curLine.text);
+  if (headingMatch) {
+    const level = headingMatch[1].length;
+    label = `当前章节 (${level}级标题及下属内容)`;
+    endIdx = lines.length - 1;
+    for (let i = curIdx + 1; i < lines.length; i++) {
+      const nextHeading = /^(#{1,6})[ \t]+/.exec(lines[i].text);
+      if (nextHeading && nextHeading[1].length <= level) {
+        endIdx = i - 1;
+        break;
+      }
+    }
+  }
+  // 2. Fenced Code Block
+  else if (parsed.protectedLines.has(curLine.number) || /^ {0,3}(`{3,}|~{3,})/.test(curLine.text)) {
+    let openFenceIdx = -1;
+    let fenceChar = '';
+    let fenceSize = 0;
+    for (let i = curIdx; i >= 0; i--) {
+      const m = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i].text);
+      if (m) {
+        openFenceIdx = i;
+        fenceChar = m[1][0];
+        fenceSize = m[1].length;
+        break;
+      }
+    }
+    if (openFenceIdx !== -1) {
+      startIdx = openFenceIdx;
+      label = '当前代码块';
+      endIdx = lines.length - 1;
+      for (let i = openFenceIdx + 1; i < lines.length; i++) {
+        const close = /^ {0,3}(`+|~+)\s*$/.exec(lines[i].text);
+        if (close && close[1][0] === fenceChar && close[1].length >= fenceSize) {
+          endIdx = i;
+          break;
+        }
+      }
+    }
+  }
+  // 3. Table
+  else if (curLine.text.trim().startsWith('|') && curLine.text.trim().endsWith('|')) {
+    label = '当前表格';
+    while (startIdx > 0 && lines[startIdx - 1].text.trim().startsWith('|') && lines[startIdx - 1].text.trim().endsWith('|')) {
+      startIdx--;
+    }
+    while (endIdx < lines.length - 1 && lines[endIdx + 1].text.trim().startsWith('|') && lines[endIdx + 1].text.trim().endsWith('|')) {
+      endIdx++;
+    }
+  }
+  // 4. Callout / Blockquote
+  else if (/^ {0,3}>/.test(curLine.text)) {
+    label = '当前引用/Callout';
+    while (startIdx > 0 && /^ {0,3}>/.test(lines[startIdx - 1].text)) {
+      startIdx--;
+    }
+    while (endIdx < lines.length - 1 && /^ {0,3}>/.test(lines[endIdx + 1].text)) {
+      endIdx++;
+    }
+  }
+  // 5. List item (including nested children)
+  else if (/^(\s*)([-*+]|\d+\.)\s+/.test(curLine.text)) {
+    const match = /^(\s*)([-*+]|\d+\.)\s+/.exec(curLine.text)!;
+    const baseIndent = match[1].length;
+    label = '当前列表项 (含子项)';
+    for (let i = curIdx + 1; i < lines.length; i++) {
+      const lineText = lines[i].text;
+      if (!lineText.trim()) {
+        let hasDeeperAhead = false;
+        for (let j = i + 1; j < lines.length; j++) {
+          if (lines[j].text.trim()) {
+            const nextIndent = /^\s*/.exec(lines[j].text)?.[0].length ?? 0;
+            if (nextIndent > baseIndent) hasDeeperAhead = true;
+            break;
+          }
+        }
+        if (hasDeeperAhead) continue;
+        else break;
+      }
+      const nextIndent = /^\s*/.exec(lineText)?.[0].length ?? 0;
+      if (nextIndent > baseIndent) {
+        endIdx = i;
+      } else {
+        break;
+      }
+    }
+  }
+  // 6. Normal Paragraph
+  else {
+    label = '当前段落';
+    while (startIdx > 0 && lines[startIdx - 1].text.trim() && !/^#{1,6}[ \t]+/.test(lines[startIdx - 1].text) && !/^ {0,3}>/.test(lines[startIdx - 1].text) && !lines[startIdx - 1].text.trim().startsWith('|')) {
+      startIdx--;
+    }
+    while (endIdx < lines.length - 1 && lines[endIdx + 1].text.trim() && !/^#{1,6}[ \t]+/.test(lines[endIdx + 1].text) && !/^ {0,3}>/.test(lines[endIdx + 1].text) && !lines[endIdx + 1].text.trim().startsWith('|')) {
+      endIdx++;
+    }
+  }
+
+  while (endIdx > startIdx && !lines[endIdx].text.trim()) {
+    endIdx--;
+  }
+
+  const from = lines[startIdx].from;
+  const to = lines[endIdx].end;
+
+  const isEnclosed = parsed.ranges.some(r => from >= r.from && to <= r.to);
+
+  return { from, to, label, isEnclosed };
+}
+
+export function toggleCheckboxInSource(sourceText: string, rangeIndex: number, checkboxIndex: number): string | undefined {
+  const parsed = parseRanges(sourceText);
+  if (rangeIndex < 0 || rangeIndex >= parsed.ranges.length) return undefined;
+  const range = parsed.ranges[rangeIndex];
+  const regex = /^(\s*[-*+]\s+\[)([ xX])(\])/gm;
+  let count = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(range.text)) !== null) {
+    if (count === checkboxIndex) {
+      const currentVal = match[2];
+      const newVal = currentVal === ' ' ? 'x' : ' ';
+      const matchPosInText = range.from + match.index + match[1].length;
+      return sourceText.slice(0, matchPosInText) + newVal + sourceText.slice(matchPosInText + 1);
+    }
+    count++;
+  }
+  return undefined;
+}
+
