@@ -1,9 +1,9 @@
 {
   "id": "app-view",
-  "name": "应用版",
-  "version": "0.1.0",
+  "name": "行动版",
+  "version": "0.2.0",
   "minAppVersion": "1.13.7",
-  "description": "从详细笔记中选择范围，自动生成按原文顺序排列的只读应用版。",
+  "description": "在同一篇笔记中提炼并以只读视图呈现行动要点。原生双态切换，记忆最后状态，零侵入纯粹体验。",
   "author": "Zephyr333",
   "isDesktopOnly": false
 }

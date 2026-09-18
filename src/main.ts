@@ -1,8 +1,33 @@
-import { Component, ItemView, Keymap, MarkdownRenderer, MarkdownView, Notice, Plugin, TFile, type Editor, type ViewStateResult, type WorkspaceLeaf } from 'obsidian';
+import {
+  App,
+  Component,
+  ItemView,
+  Keymap,
+  MarkdownRenderer,
+  MarkdownView,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TFile,
+  type Editor,
+  type ViewStateResult,
+  type WorkspaceLeaf
+} from 'obsidian';
 import { rangeExtension } from './editor';
 import { addRangeEdit, parseRanges, removeRangeEdit, type TextEdit } from './ranges';
 
 const VIEW = 'app-view';
+
+export interface PluginSettings {
+  viewName: string;
+  noteStates: Record<string, 'detail' | 'app'>;
+}
+
+const DEFAULT_SETTINGS: PluginSettings = {
+  viewName: '行动版',
+  noteStates: {}
+};
 
 class ApplicationView extends ItemView {
   path = '';
@@ -10,20 +35,22 @@ class ApplicationView extends ItemView {
   private rendered?: Component;
   private lastText?: string;
   private heading!: HTMLElement;
-  private status!: HTMLElement;
   private body!: HTMLElement;
   private timer?: number;
   private timerWindow?: Window;
 
   constructor(leaf: WorkspaceLeaf, private readonly owner: ApplicationPlugin) {
     super(leaf);
-    this.addAction('file-text', '返回详细版', () => {
-      void this.owner.openSource(this.path);
+    this.addAction('file-text', '返回详细版', (evt: MouseEvent) => {
+      void this.owner.openSource(this.path, evt, this.leaf);
     });
   }
 
   getViewType() { return VIEW; }
-  getDisplayText() { return this.path ? `${this.path.split('/').pop()?.replace(/\.md$/, '')} · 应用版` : '应用版'; }
+  getDisplayText() {
+    const file = this.app.vault.getAbstractFileByPath(this.path);
+    return file instanceof TFile ? file.basename : (this.path ? this.path.split('/').pop()?.replace(/\.md$/, '') ?? '' : this.owner.settings.viewName);
+  }
   getIcon() { return 'list-checks'; }
   getState() { return { path: this.path }; }
   async setState(state: unknown, result: ViewStateResult) {
@@ -35,16 +62,12 @@ class ApplicationView extends ItemView {
 
   async onOpen() {
     this.contentEl.addClass('app-view-container');
-    const header = this.contentEl.createDiv({ cls: 'app-view-doc-header' });
-    const top = header.createDiv({ cls: 'app-view-doc-header-top' });
-    this.heading = top.createEl('h1', { cls: 'app-view-title', text: '应用版' });
-    const backBtn = top.createEl('button', { cls: 'app-view-return-btn', text: '返回详细版' });
-    this.registerDomEvent(backBtn, 'click', () => { void this.owner.openSource(this.path); });
+    this.contentEl.addClass('markdown-rendered');
+    this.contentEl.addClass('markdown-preview-view');
 
-    this.status = header.createDiv({ cls: 'app-view-status', attr: { 'aria-live': 'polite' } });
-    this.body = this.contentEl.createDiv({ cls: 'app-view-body markdown-rendered' });
+    this.heading = this.contentEl.createEl('div', { cls: 'inline-title' });
+    this.body = this.contentEl.createDiv({ cls: 'app-view-body' });
 
-    // A projection is read-only, including task checkboxes and editable embeds.
     this.registerDomEvent(this.body, 'click', (event: MouseEvent) => {
       const target = event.target as Node | null;
       if (target?.instanceOf(Element) && target.closest('input, textarea, select, [contenteditable="true"]')) {
@@ -76,42 +99,70 @@ class ApplicationView extends ItemView {
     if (!this.body) return;
     const generation = ++this.generation;
     const file = this.app.vault.getAbstractFileByPath(this.path);
-    this.heading.setText(file instanceof TFile ? `${file.basename} · 应用版` : '应用版');
+    this.heading.setText(file instanceof TFile ? file.basename : '');
+
     if (!(file instanceof TFile)) {
-      this.lastText = undefined; this.disposeRendering(); this.body.empty();
-      this.status.setText('源笔记不存在。请从详细版重新打开应用版。'); return;
+      this.lastText = undefined;
+      this.disposeRendering();
+      this.body.empty();
+      this.body.createDiv({ cls: 'app-view-empty', text: '源笔记不存在。' });
+      return;
     }
+
     let text: string;
     try { text = await this.owner.sourceText(file); }
-    catch { if (generation === this.generation) this.status.setText('暂时无法读取源笔记，请稍后重新打开。'); return; }
+    catch {
+      if (generation === this.generation) {
+        this.body.empty();
+        this.body.createDiv({ cls: 'app-view-empty', text: '暂时无法读取源笔记。' });
+      }
+      return;
+    }
+
     if (generation !== this.generation || this.lastText === text) return;
     const parsed = parseRanges(text);
+
     if (parsed.errors.length) {
-      this.lastText = undefined; this.disposeRendering(); this.body.empty();
-      this.status.setText(`范围需要修正：${parsed.errors.join(' ')} 返回详细版并打开“调整应用范围”即可修改。`); return;
+      this.lastText = undefined;
+      this.disposeRendering();
+      this.body.empty();
+      this.body.createDiv({ cls: 'app-view-empty', text: `范围标记需要修正：${parsed.errors.join(' ')}` });
+      return;
     }
+
     const staging = this.body.ownerDocument.createDocumentFragment().createDiv();
     const component = new Component();
     this.addChild(component);
+
     try {
-      for (const range of parsed.ranges) {
-        if (!range.text.trim()) continue;
-        const section = staging.createEl('section', { cls: 'app-view-section' });
-        await MarkdownRenderer.render(this.app, range.text, section, file.path, component);
-        if (generation !== this.generation) { this.removeChild(component); return; }
+      if (parsed.ranges.length === 0) {
+        staging.createDiv({
+          cls: 'app-view-empty',
+          text: `未收录任何${this.owner.settings.viewName}内容。在详细版中选中内容，右键点击“加入${this.owner.settings.viewName}”。`
+        });
+      } else {
+        for (const range of parsed.ranges) {
+          if (!range.text.trim()) continue;
+          const section = staging.createEl('section', { cls: 'app-view-section' });
+          await MarkdownRenderer.render(this.app, range.text, section, file.path, component);
+          if (generation !== this.generation) { this.removeChild(component); return; }
+        }
+        for (const checkbox of Array.from(staging.querySelectorAll<HTMLInputElement>('input'))) checkbox.disabled = true;
+        for (const editable of Array.from(staging.querySelectorAll<HTMLElement>('[contenteditable]'))) editable.setAttribute('contenteditable', 'false');
       }
-      for (const checkbox of Array.from(staging.querySelectorAll<HTMLInputElement>('input'))) checkbox.disabled = true;
-      for (const editable of Array.from(staging.querySelectorAll<HTMLElement>('[contenteditable]'))) editable.setAttribute('contenteditable', 'false');
+
       const scroll = this.contentEl.scrollTop;
       this.disposeRendering();
       this.rendered = component;
       this.body.replaceChildren(...Array.from(staging.childNodes));
       this.lastText = text;
-      this.status.setText(parsed.ranges.length ? `${parsed.ranges.length} 个范围 · 随详细版自动更新 · 只读` : '还没有应用内容。在详细版中选中文字，然后选择“加入应用版”。');
       this.contentEl.scrollTop = scroll;
     } catch {
       this.removeChild(component);
-      if (generation === this.generation) this.status.setText('内容渲染失败，请返回详细版检查内容后重试。');
+      if (generation === this.generation) {
+        this.body.empty();
+        this.body.createDiv({ cls: 'app-view-empty', text: '内容渲染失败，请返回详细版检查后重试。' });
+      }
     }
   }
 
@@ -120,18 +171,24 @@ class ApplicationView extends ItemView {
 }
 
 export default class ApplicationPlugin extends Plugin {
+  settings: PluginSettings = DEFAULT_SETTINGS;
   private editing = false;
   private decorations = rangeExtension(() => this.editing);
-  private leafActions = new Map<WorkspaceLeaf, { showEl: HTMLElement; toggleEl: HTMLElement; cleanup: () => void }>();
+  private leafActions = new Map<WorkspaceLeaf, { showEl: HTMLElement; cleanup: () => void }>();
   private floatingBar?: { el: HTMLElement; countEl: HTMLElement; cleanup: () => void };
+  private statusBarItem?: HTMLElement;
 
-  onload() {
+  async onload() {
+    await this.loadSettings();
+
     this.registerView(VIEW, leaf => new ApplicationView(leaf, this));
     this.registerEditorExtension(this.decorations.extension);
 
+    this.addSettingTab(new ApplicationSettingTab(this.app, this));
+
     this.addCommand({
       id: 'show-application',
-      name: '查看应用版',
+      name: `查看${this.settings.viewName}`,
       checkCallback: checking => {
         const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
         if (!file) return false;
@@ -142,65 +199,118 @@ export default class ApplicationPlugin extends Plugin {
 
     this.addCommand({
       id: 'toggle-ranges',
-      name: '显示／隐藏应用范围',
+      name: `显示／隐藏${this.settings.viewName}范围`,
       callback: () => this.toggleRanges()
     });
 
     this.addCommand({
       id: 'include-selection',
-      name: '加入应用版',
+      name: `加入${this.settings.viewName}`,
       editorCallback: editor => this.include(editor)
     });
 
     this.addCommand({
       id: 'exclude-range',
-      name: '取消当前应用范围',
+      name: `取消当前${this.settings.viewName}范围`,
       editorCallback: editor => this.exclude(editor)
     });
 
-    this.addRibbonIcon('list-checks', '详细版／应用版', () => {
-      const view = this.app.workspace.getActiveViewOfType(ApplicationView);
-      if (view) void this.openSource(view.path);
+    this.addRibbonIcon('list-checks', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
+      const appView = this.app.workspace.getActiveViewOfType(ApplicationView);
+      if (appView) void this.openSource(appView.path, evt, appView.leaf);
       else {
-        const file = this.app.workspace.getActiveViewOfType(MarkdownView)?.file;
-        if (file) void this.openApplication(file);
+        const mdView = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (mdView?.file) void this.openApplication(mdView.file, evt, mdView.leaf);
         else new Notice('请先打开一篇详细笔记。');
       }
     });
 
     this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor) => {
-      menu.addItem(item => item.setTitle('加入应用版').setIcon('plus').onClick(() => this.include(editor)));
-      menu.addItem(item => item.setTitle('取消当前应用范围').setIcon('minus').onClick(() => this.exclude(editor)));
+      menu.addItem(item => item.setTitle(`加入${this.settings.viewName}`).setIcon('plus').onClick(() => this.include(editor)));
+      menu.addItem(item => item.setTitle(`取消当前${this.settings.viewName}范围`).setIcon('minus').onClick(() => this.exclude(editor)));
     }));
 
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'md') {
-        menu.addItem(item => item.setTitle('查看应用版').setIcon('list-checks').onClick(() => this.openApplication(file)));
+        menu.addItem(item => item.setTitle(`查看${this.settings.viewName}`).setIcon('list-checks').onClick(() => this.openApplication(file)));
       }
     }));
+
+    // Status bar item on desktop
+    this.statusBarItem = this.addStatusBarItem();
+    this.statusBarItem.addClass('app-view-statusbar');
+    this.updateStatusBar();
+    this.statusBarItem.addEventListener('click', () => {
+      const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (active) {
+        this.toggleRanges();
+      } else {
+        new Notice(`请先聚焦一篇详细笔记以调整${this.settings.viewName}范围。`);
+      }
+    });
 
     this.registerEvent(this.app.workspace.on('editor-change', (_editor, info) => {
       this.updateViews(info.file?.path);
       this.updateFloatingBar();
+      this.updateStatusBar();
     }));
 
     this.registerEvent(this.app.vault.on('modify', file => this.updateViews(file.path)));
-    this.registerEvent(this.app.vault.on('delete', file => this.updateViews(file.path)));
+    this.registerEvent(this.app.vault.on('delete', file => {
+      this.updateViews(file.path);
+      delete this.settings.noteStates[file.path];
+      void this.saveSettings();
+    }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
       for (const view of this.applicationViews()) {
         if (view.path === oldPath) view.path = file.path;
         else if (view.path.startsWith(oldPath + '/')) view.path = file.path + view.path.slice(oldPath.length);
         view.scheduleRefresh();
       }
+      if (this.settings.noteStates[oldPath]) {
+        this.settings.noteStates[file.path] = this.settings.noteStates[oldPath];
+        delete this.settings.noteStates[oldPath];
+        void this.saveSettings();
+      }
       this.app.workspace.requestSaveLayout();
+    }));
+
+    // State persistence on opening notes
+    this.registerEvent(this.app.workspace.on('file-open', async file => {
+      if (!(file instanceof TFile) || file.extension !== 'md') return;
+      if (this.settings.noteStates[file.path] === 'app') {
+        const text = await this.sourceText(file);
+        const parsed = parseRanges(text);
+        if (parsed.ranges.length > 0) {
+          const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+          if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
+            await activeLeaf.setViewState({ type: VIEW, state: { path: file.path }, active: true });
+          }
+        } else {
+          this.settings.noteStates[file.path] = 'detail';
+          await this.saveSettings();
+        }
+      }
     }));
 
     this.registerEvent(this.app.workspace.on('layout-change', () => this.syncActions()));
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
       this.syncActions();
       this.updateFloatingBarHost();
+      this.updateStatusBar();
     }));
-    this.app.workspace.onLayoutReady(() => this.syncActions());
+    this.app.workspace.onLayoutReady(() => {
+      this.syncActions();
+      this.updateStatusBar();
+    });
+  }
+
+  async loadSettings() {
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+  }
+
+  async saveSettings() {
+    await this.saveData(this.settings);
   }
 
   private applicationViews(): ApplicationView[] {
@@ -222,22 +332,39 @@ export default class ApplicationPlugin extends Plugin {
     return this.app.vault.read(file);
   }
 
-  async openApplication(file: TFile) {
-    const leaf = this.app.workspace.getLeavesOfType(VIEW)[0] ?? this.app.workspace.getLeaf('tab');
-    await leaf.setViewState({ type: VIEW, state: { path: file.path }, active: true });
-    await this.app.workspace.revealLeaf(leaf);
-    this.app.workspace.setActiveLeaf(leaf, { focus: true });
+  private resolveTargetLeaf(evt: MouseEvent, currentLeaf: WorkspaceLeaf): WorkspaceLeaf {
+    if (evt.button === 1 || Keymap.isModEvent(evt)) {
+      if (evt.altKey) return this.app.workspace.getLeaf('split');
+      return this.app.workspace.getLeaf('tab');
+    }
+    return currentLeaf;
   }
 
-  async openSource(path: string) {
+  async openApplication(file: TFile, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf) {
+    const activeLeaf = fromLeaf ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf ?? this.app.workspace.getLeaf(false);
+    const targetLeaf = evt ? this.resolveTargetLeaf(evt, activeLeaf) : activeLeaf;
+
+    this.settings.noteStates[file.path] = 'app';
+    await this.saveSettings();
+
+    await targetLeaf.setViewState({ type: VIEW, state: { path: file.path }, active: true });
+    await this.app.workspace.revealLeaf(targetLeaf);
+    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
+  }
+
+  async openSource(path: string, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) { new Notice('源笔记不存在。'); return; }
-    const existing = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === path);
-    if (existing) {
-      await this.app.workspace.revealLeaf(existing);
-      this.app.workspace.setActiveLeaf(existing, { focus: true });
-    }
-    else await this.app.workspace.getLeaf('tab').openFile(file, { state: { mode: 'source', source: false } });
+
+    const activeLeaf = fromLeaf ?? this.app.workspace.getActiveViewOfType(ApplicationView)?.leaf ?? this.app.workspace.getLeaf(false);
+    const targetLeaf = evt ? this.resolveTargetLeaf(evt, activeLeaf) : activeLeaf;
+
+    this.settings.noteStates[file.path] = 'detail';
+    await this.saveSettings();
+
+    await targetLeaf.setViewState({ type: 'markdown', state: { file: file.path, mode: 'source', source: false }, active: true });
+    await this.app.workspace.revealLeaf(targetLeaf);
+    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
   }
 
   private apply(editor: Editor, operation: () => TextEdit) {
@@ -249,19 +376,18 @@ export default class ApplicationPlugin extends Plugin {
 
   private include(editor: Editor) {
     this.apply(editor, () => addRangeEdit(editor.getValue(), editor.posToOffset(editor.getCursor('from')), editor.posToOffset(editor.getCursor('to'))));
+    this.updateStatusBar();
   }
 
   private exclude(editor: Editor) {
     this.apply(editor, () => removeRangeEdit(editor.getValue(), editor.posToOffset(editor.getCursor())));
+    this.updateStatusBar();
   }
 
   private toggleRanges() {
     this.editing = !this.editing;
     this.decorations.refresh();
-    for (const { toggleEl } of this.leafActions.values()) {
-      toggleEl.setAttribute('aria-label', this.editing ? '完成范围调整' : '调整应用范围');
-      toggleEl.toggleClass('is-active', this.editing);
-    }
+    this.updateStatusBar();
     if (this.editing) {
       const active = this.app.workspace.getActiveViewOfType(MarkdownView);
       if (active) this.mountFloatingBar(active);
@@ -283,19 +409,15 @@ export default class ApplicationPlugin extends Plugin {
       if (this.leafActions.has(leaf)) continue;
       const view = leaf.view;
       if (!(view instanceof MarkdownView)) continue;
-      const showEl = view.addAction('list-checks', '查看应用版', () => {
-        if (view.file) void this.openApplication(view.file);
+
+      const showEl = view.addAction('list-checks', `切换到${this.settings.viewName}`, (evt: MouseEvent) => {
+        if (view.file) void this.openApplication(view.file, evt, leaf);
       });
-      const toggleEl = view.addAction('sliders-horizontal', this.editing ? '完成范围调整' : '调整应用范围', () => {
-        this.toggleRanges();
-      });
-      toggleEl.toggleClass('is-active', this.editing);
+
       this.leafActions.set(leaf, {
         showEl,
-        toggleEl,
         cleanup: () => {
           showEl.remove();
-          toggleEl.remove();
         }
       });
     }
@@ -304,7 +426,7 @@ export default class ApplicationPlugin extends Plugin {
   private mountFloatingBar(view: MarkdownView) {
     this.unmountFloatingBar();
     const bar = view.containerEl.createDiv({ cls: 'app-view-floating-bar' });
-    bar.createSpan({ cls: 'app-view-floating-label', text: '范围调整中' });
+    bar.createSpan({ cls: 'app-view-floating-label', text: `${this.settings.viewName}调整中` });
     const countEl = bar.createSpan({ cls: 'app-view-floating-count' });
 
     const include = bar.createEl('button', { cls: 'app-view-floating-btn', text: '加入选区' });
@@ -367,6 +489,23 @@ export default class ApplicationPlugin extends Plugin {
     }
   }
 
+  updateStatusBar() {
+    if (!this.statusBarItem) return;
+    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!active?.file) {
+      this.statusBarItem.setText('');
+      this.statusBarItem.style.display = 'none';
+      return;
+    }
+    this.statusBarItem.style.display = '';
+    const text = active.editor.getValue();
+    const parsed = parseRanges(text);
+    const count = parsed.ranges.length;
+    this.statusBarItem.setText(`🎯 ${this.settings.viewName}: ${count} 段`);
+    this.statusBarItem.setAttribute('aria-label', `点击调整${this.settings.viewName}范围`);
+    this.statusBarItem.toggleClass('is-active', this.editing);
+  }
+
   onunload() {
     this.unmountFloatingBar();
     for (const action of this.leafActions.values()) {
@@ -375,4 +514,29 @@ export default class ApplicationPlugin extends Plugin {
     this.leafActions.clear();
   }
 }
+
+class ApplicationSettingTab extends PluginSettingTab {
+  constructor(app: App, readonly plugin: ApplicationPlugin) {
+    super(app, plugin);
+  }
+
+  display(): void {
+    const { containerEl } = this;
+    containerEl.empty();
+    containerEl.createEl('h2', { text: `${this.plugin.settings.viewName}设置` });
+
+    new Setting(containerEl)
+      .setName('视图名称')
+      .setDesc('在顶栏、状态栏和菜单中显示的称呼（如：行动版、精要版、实践版）')
+      .addText(text => text
+        .setPlaceholder('行动版')
+        .setValue(this.plugin.settings.viewName)
+        .onChange(async value => {
+          this.plugin.settings.viewName = value.trim() || '行动版';
+          await this.plugin.saveSettings();
+          this.plugin.updateStatusBar();
+        }));
+  }
+}
+
 

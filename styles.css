@@ -1,50 +1,33 @@
-/* Application View Container and Content */
+/* Action View Container - matches Obsidian native Reading View */
 .app-view-container {
   overflow-y: auto;
   padding: 0 !important;
+  height: 100%;
 }
 
-.app-view-doc-header {
+.app-view-container .inline-title {
+  font-size: var(--inline-title-size, 2em);
+  font-weight: var(--inline-title-weight, 700);
+  line-height: var(--inline-title-line-height, 1.3);
+  color: var(--inline-title-color, var(--text-normal));
   max-width: var(--file-line-width);
   margin-inline: auto;
   padding: var(--size-4-6) var(--size-4-6) var(--size-4-2);
-  border-bottom: var(--border-width) solid var(--background-modifier-border);
-  display: flex;
-  flex-direction: column;
-  gap: var(--size-4-1);
-}
-
-.app-view-doc-header-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--size-4-2);
-}
-
-.app-view-title {
-  font-size: var(--h1-size, 1.8em);
-  font-weight: var(--font-bold);
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.app-view-status {
-  color: var(--text-muted);
-  font-size: var(--font-ui-small);
-}
-
-.app-view-return-btn {
-  font-size: var(--font-ui-small);
-  padding: var(--size-4-1) var(--size-4-3);
-  cursor: pointer;
-  white-space: nowrap;
 }
 
 .app-view-body {
   max-width: var(--file-line-width);
   margin-inline: auto;
-  padding: var(--size-4-4) var(--size-4-6) var(--size-4-12);
+  padding: var(--size-4-2) var(--size-4-6) var(--size-4-12);
   overflow-wrap: anywhere;
+}
+
+.app-view-empty {
+  color: var(--text-muted);
+  font-size: var(--font-ui-medium);
+  padding: var(--size-4-8) var(--size-4-4);
+  text-align: center;
+  font-style: italic;
 }
 
 .app-view-section + .app-view-section {
@@ -168,4 +151,19 @@
 .is-mobile .app-view-body {
   padding-inline: var(--size-4-4);
 }
+
+.app-view-statusbar {
+  cursor: pointer;
+  user-select: none;
+}
+
+.app-view-statusbar:hover {
+  color: var(--text-accent);
+}
+
+.app-view-statusbar.is-active {
+  color: var(--interactive-accent);
+  font-weight: var(--font-semibold);
+}
+
 
