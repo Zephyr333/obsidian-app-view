@@ -77,38 +77,11 @@ class ApplicationView extends FileView {
     });
   }
 
-  canAcceptExtension(extension: string) {
-    return extension === 'md';
+  canAcceptExtension(_extension: string) {
+    return false;
   }
 
   async onLoadFile(file: TFile) {
-    if (this.owner.settings.noteStates[file.path] !== 'app') {
-      let savedState = this.owner.settings.markdownStates?.[file.path];
-      const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
-      if (!savedState && hasReaderMode) {
-        savedState = { mode: 'preview', source: false };
-      }
-      if (!savedState) {
-        savedState = { mode: 'preview', source: false };
-      }
-      this.owner.setPendingModeRestoration(file.path, savedState);
-      try {
-        await this.leaf.setViewState({
-          type: 'markdown',
-          state: {
-            file: file.path,
-            mode: savedState.mode,
-            source: savedState.source
-          },
-          active: true
-        });
-        await this.owner.applyMarkdownModeWhenReady(this.leaf, file.path, savedState);
-      } catch (e) {
-        console.error('Failed to switch to markdown view:', e);
-      }
-      return;
-    }
-
     this.file = file;
     this.path = file.path;
     this.lastText = undefined;
@@ -654,8 +627,20 @@ export default class ApplicationPlugin extends Plugin {
         const alreadyApp = this.app.workspace.getLeavesOfType(VIEW).some(l => l.view instanceof ApplicationView && l.view.path === file.path);
         if (alreadyApp) return;
 
-        const targetLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path)
-          ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+        let targetLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path);
+        if (!targetLeaf) {
+          const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+          if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
+            targetLeaf = activeLeaf;
+          }
+        }
+        if (!targetLeaf) {
+          this.app.workspace.iterateRootLeaves(leaf => {
+            if (!targetLeaf && leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path) {
+              targetLeaf = leaf;
+            }
+          });
+        }
         if (targetLeaf && targetLeaf.view instanceof MarkdownView) {
           await targetLeaf.setViewState({ type: VIEW, state: { path: file.path, file: file.path }, active: true });
           await this.app.workspace.revealLeaf(targetLeaf);
