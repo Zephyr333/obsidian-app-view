@@ -1,6 +1,7 @@
 import {
   App,
   Component,
+  FileView,
   ItemView,
   Keymap,
   MarkdownRenderer,
@@ -46,7 +47,7 @@ const DEFAULT_SETTINGS: PluginSettings = {
   markdownStates: {}
 };
 
-class ApplicationView extends ItemView {
+class ApplicationView extends FileView {
   path = '';
   private generation = 0;
   private rendered?: Component;
@@ -61,6 +62,8 @@ class ApplicationView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private readonly owner: ApplicationPlugin) {
     super(leaf);
+    this.navigation = true;
+    this.allowNoFile = false;
     const backActionEl = this.addAction('file-text', '左键：返回详细版 | 右键：管理速查版', (evt: MouseEvent) => {
       void this.owner.openSource(this.path, evt, this.leaf);
     });
@@ -74,15 +77,41 @@ class ApplicationView extends ItemView {
     });
   }
 
+  canAcceptExtension(_extension: string) {
+    return false;
+  }
+
+  async onLoadFile(file: TFile) {
+    this.file = file;
+    this.path = file.path;
+    this.lastText = undefined;
+    await this.refresh();
+  }
+
+  async onUnloadFile(_file: TFile) {
+    this.file = null;
+    this.path = '';
+    this.lastText = undefined;
+  }
+
   getViewType() { return VIEW; }
   getDisplayText() {
     const file = this.app.vault.getAbstractFileByPath(this.path);
     return file instanceof TFile ? file.basename : (this.path ? this.path.split('/').pop()?.replace(/\.md$/, '') ?? '' : this.owner.settings.viewName);
   }
   getIcon() { return 'zap'; }
-  getState() { return { path: this.path }; }
+  getState() { return { path: this.path, file: this.path }; }
   async setState(state: unknown, result: ViewStateResult) {
-    if (state && typeof state === 'object' && 'path' in state && typeof state.path === 'string') this.path = state.path;
+    if (state && typeof state === 'object' && 'path' in state && typeof state.path === 'string') {
+      this.path = state.path;
+      const file = this.app.vault.getAbstractFileByPath(this.path);
+      this.file = file instanceof TFile ? file : null;
+    }
+    if (state && typeof state === 'object' && 'file' in state && typeof (state as any).file === 'string') {
+      this.path = (state as any).file;
+      const file = this.app.vault.getAbstractFileByPath(this.path);
+      this.file = file instanceof TFile ? file : null;
+    }
     if (state && typeof state === 'object' && 'targetOffset' in state && typeof state.targetOffset === 'number') {
       this.targetScrollOffset = state.targetOffset;
     }
@@ -590,23 +619,15 @@ export default class ApplicationPlugin extends Plugin {
         }
       }
 
-      const allLeaves = this.app.workspace.getLeavesOfType('markdown').concat(this.app.workspace.getLeavesOfType(VIEW));
-      const leavesForFile = allLeaves.filter(leaf => {
-        if (leaf.view instanceof MarkdownView) return leaf.view.file?.path === file.path;
-        if (leaf.view instanceof ApplicationView) return leaf.view.path === file.path;
-        return false;
-      });
-
-      // If more than 1 leaf exists for this file (e.g. split view or existing tabs), preserve layout
-      if (leavesForFile.length > 1) return;
-
       if (this.settings.noteStates[file.path] === 'app') {
         const text = await this.sourceText(file);
         const parsed = parseRanges(text);
         if (parsed.ranges.length > 0) {
-          const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
-          if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
-            await activeLeaf.setViewState({ type: VIEW, state: { path: file.path }, active: true });
+          const targetLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path)
+            ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+          if (targetLeaf && targetLeaf.view instanceof MarkdownView) {
+            await targetLeaf.setViewState({ type: VIEW, state: { path: file.path, file: file.path }, active: true });
+            return;
           }
         } else {
           this.settings.noteStates[file.path] = 'detail';
