@@ -96,7 +96,7 @@ export function rangeExtension(isEditing: () => boolean): { extension: Extension
           );
           decorations.push(
             Decoration.widget({
-              widget: new MarkerBadge(marker.kind === 'start' ? '应用版开始' : '应用版结束'),
+              widget: new MarkerBadge(marker.kind === 'start' ? '速查版开始' : '速查版结束'),
               side: -1
             }).range(marker.from)
           );

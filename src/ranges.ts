@@ -72,21 +72,21 @@ export function parseRanges(text: string): ParsedRanges {
       else if (token === '%%' && !htmlComment) comment = !comment;
     }
   }
-  if (open) result.errors.push(`第 ${open.number} 行：应用范围没有结束标记。`);
+  if (open) result.errors.push(`第 ${open.number} 行：速查范围没有结束标记。`);
   return result;
 }
 
 export interface TextEdit { from: number; to: number; text: string }
 
 export function addRangeEdit(text: string, from: number, to: number): TextEdit {
-  if (from === to) throw new Error('请先选中要加入应用版的完整段落或内容块。');
+  if (from === to) throw new Error('请先选中要加入速查版的完整段落或内容块。');
   const parsed = parseRanges(text);
   if (parsed.errors.length) throw new Error(parsed.errors[0]);
   const lines = linesOf(text);
   const first = lines.find(l => from >= l.from && from < l.end) ?? lines[lines.length - 1];
   const last = lines.find(l => to - 1 >= l.from && to - 1 < l.end) ?? first;
   if (text.slice(first.from, from).trim() || text.slice(to, last.to).trim()) {
-    throw new Error('请选中完整行；应用范围不截取一句话中的几个字。');
+    throw new Error('请选中完整行；速查范围不截取一句话中的几个字。');
   }
   if (parsed.protectedLines.has(first.number) && !/^ {0,3}(`{3,}|~{3,})/.test(first.text)) {
     throw new Error('请从完整内容块的开头选择，不要从代码块、属性或注释内部开始。');

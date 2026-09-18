@@ -26,7 +26,7 @@ export interface PluginSettings {
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
-  viewName: '行动版',
+  viewName: '速查版',
   noteStates: {}
 };
 
@@ -58,7 +58,7 @@ class ApplicationView extends ItemView {
     const file = this.app.vault.getAbstractFileByPath(this.path);
     return file instanceof TFile ? file.basename : (this.path ? this.path.split('/').pop()?.replace(/\.md$/, '') ?? '' : this.owner.settings.viewName);
   }
-  getIcon() { return 'target'; }
+  getIcon() { return 'zap'; }
   getState() { return { path: this.path }; }
   async setState(state: unknown, result: ViewStateResult) {
     if (state && typeof state === 'object' && 'path' in state && typeof state.path === 'string') this.path = state.path;
@@ -234,7 +234,7 @@ export default class ApplicationPlugin extends Plugin {
       }
     });
 
-    this.addRibbonIcon('target', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
+    this.addRibbonIcon('zap', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
       const appView = this.app.workspace.getActiveViewOfType(ApplicationView);
       if (appView) void this.openSource(appView.path, evt, appView.leaf);
       else {
@@ -256,7 +256,7 @@ export default class ApplicationPlugin extends Plugin {
 
         if (isEnclosed) {
           menu.addItem(item =>
-            item.setTitle(`从${this.settings.viewName}移除选区`)
+            item.setTitle(`移除${this.settings.viewName}`)
               .setIcon('minus-circle')
               .onClick(() => this.exclude(editor))
           );
@@ -273,23 +273,22 @@ export default class ApplicationPlugin extends Plugin {
 
         if (insideRange) {
           menu.addItem(item =>
-            item.setTitle(`从${this.settings.viewName}移除本段`)
+            item.setTitle(`移除${this.settings.viewName}`)
               .setIcon('minus-circle')
               .onClick(() => this.exclude(editor))
           );
-        } else {
-          menu.addItem(item =>
-            item.setTitle(this.editing ? `退出${this.settings.viewName}调整` : `调整${this.settings.viewName}范围`)
-              .setIcon('sliders-horizontal')
-              .onClick(() => this.toggleRanges())
-          );
         }
+        menu.addItem(item =>
+          item.setTitle(this.editing ? `退出${this.settings.viewName}调整` : `调整${this.settings.viewName}范围`)
+            .setIcon('sliders-horizontal')
+            .onClick(() => this.toggleRanges())
+        );
       }
     }));
 
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'md') {
-        menu.addItem(item => item.setTitle(`查看${this.settings.viewName}`).setIcon('target').onClick(() => this.openApplication(file)));
+        menu.addItem(item => item.setTitle(`查看${this.settings.viewName}`).setIcon('zap').onClick(() => this.openApplication(file)));
       }
     }));
 
@@ -463,7 +462,7 @@ export default class ApplicationPlugin extends Plugin {
       const view = leaf.view;
       if (!(view instanceof MarkdownView)) continue;
 
-      const showEl = view.addAction('target', `左键：查看${this.settings.viewName} | 右键：调整范围`, (evt: MouseEvent) => {
+      const showEl = view.addAction('zap', `左键：查看${this.settings.viewName} | 右键：调整范围`, (evt: MouseEvent) => {
         if (view.file) void this.openApplication(view.file, evt, leaf);
       });
 
@@ -572,12 +571,12 @@ class ApplicationSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('视图名称')
-      .setDesc('在顶栏、右键菜单和命令面板中显示的称呼（如：行动版、精要版、实践版）')
+      .setDesc('在顶栏、右键菜单和命令面板中显示的称呼（如：速查版、精要版、实践版）')
       .addText(text => text
-        .setPlaceholder('行动版')
+        .setPlaceholder('速查版')
         .setValue(this.plugin.settings.viewName)
         .onChange(async value => {
-          this.plugin.settings.viewName = value.trim() || '行动版';
+          this.plugin.settings.viewName = value.trim() || '速查版';
           await this.plugin.saveSettings();
         }));
   }

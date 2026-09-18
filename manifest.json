@@ -1,9 +1,9 @@
 {
   "id": "app-view",
-  "name": "行动版",
+  "name": "速查版",
   "version": "0.2.0",
   "minAppVersion": "1.13.7",
-  "description": "在同一篇笔记中提炼并以只读视图呈现行动要点。原生双态切换，记忆最后状态，零侵入纯粹体验。",
+  "description": "在同一篇笔记中提炼并以只读视图呈现速查要点。原生双态切换，记忆最后状态，零侵入纯粹体验。",
   "author": "Zephyr333",
   "isDesktopOnly": false
 }
