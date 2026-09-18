@@ -152,18 +152,4 @@
   padding-inline: var(--size-4-4);
 }
 
-.app-view-statusbar {
-  cursor: pointer;
-  user-select: none;
-}
-
-.app-view-statusbar:hover {
-  color: var(--text-accent);
-}
-
-.app-view-statusbar.is-active {
-  color: var(--interactive-accent);
-  font-weight: var(--font-semibold);
-}
-
 

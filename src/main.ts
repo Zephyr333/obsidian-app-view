@@ -5,6 +5,7 @@ import {
   Keymap,
   MarkdownRenderer,
   MarkdownView,
+  Menu,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -41,8 +42,39 @@ class ApplicationView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private readonly owner: ApplicationPlugin) {
     super(leaf);
-    this.addAction('file-text', '返回详细版', (evt: MouseEvent) => {
+    const backActionEl = this.addAction('file-text', '返回详细版（右键更多选项）', (evt: MouseEvent) => {
       void this.owner.openSource(this.path, evt, this.leaf);
+    });
+    backActionEl.addEventListener('contextmenu', (evt: MouseEvent) => {
+      evt.preventDefault();
+      evt.stopPropagation();
+      const menu = new Menu();
+      menu.addItem(item =>
+        item.setTitle('返回详细版并调整范围')
+          .setIcon('sliders-horizontal')
+          .onClick(async () => {
+            await this.owner.openSource(this.path, undefined, this.leaf);
+            if (!this.owner.isEditing()) this.owner.toggleRanges();
+          })
+      );
+      menu.addSeparator();
+      menu.addItem(item =>
+        item.setTitle('新标签页打开详细版')
+          .setIcon('file-plus')
+          .onClick(() => {
+            const newLeaf = this.app.workspace.getLeaf('tab');
+            void this.owner.openSource(this.path, undefined, newLeaf);
+          })
+      );
+      menu.addItem(item =>
+        item.setTitle('右侧分栏打开详细版')
+          .setIcon('split')
+          .onClick(() => {
+            const newLeaf = this.app.workspace.getLeaf('split');
+            void this.owner.openSource(this.path, undefined, newLeaf);
+          })
+      );
+      menu.showAtMouseEvent(evt);
     });
   }
 
@@ -176,7 +208,10 @@ export default class ApplicationPlugin extends Plugin {
   private decorations = rangeExtension(() => this.editing);
   private leafActions = new Map<WorkspaceLeaf, { showEl: HTMLElement; cleanup: () => void }>();
   private floatingBar?: { el: HTMLElement; countEl: HTMLElement; cleanup: () => void };
-  private statusBarItem?: HTMLElement;
+
+  isEditing() {
+    return this.editing;
+  }
 
   async onload() {
     await this.loadSettings();
@@ -225,9 +260,39 @@ export default class ApplicationPlugin extends Plugin {
       }
     });
 
-    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor) => {
-      menu.addItem(item => item.setTitle(`加入${this.settings.viewName}`).setIcon('plus').onClick(() => this.include(editor)));
-      menu.addItem(item => item.setTitle(`取消当前${this.settings.viewName}范围`).setIcon('minus').onClick(() => this.exclude(editor)));
+    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, info) => {
+      const hasSelection = editor.somethingSelected();
+      const parsed = parseRanges(editor.getValue());
+      const cursorOffset = editor.posToOffset(editor.getCursor());
+      const insideRange = parsed.ranges.some(r => cursorOffset >= r.from && cursorOffset <= r.to);
+
+      menu.addSeparator();
+      if (hasSelection) {
+        menu.addItem(item =>
+          item.setTitle(`加入${this.settings.viewName}`)
+            .setIcon('plus-circle')
+            .onClick(() => this.include(editor))
+        );
+      }
+      if (insideRange || hasSelection) {
+        menu.addItem(item =>
+          item.setTitle(insideRange && !hasSelection ? `从${this.settings.viewName}移除本段` : `取消${this.settings.viewName}范围`)
+            .setIcon('minus-circle')
+            .onClick(() => this.exclude(editor))
+        );
+      }
+      menu.addItem(item =>
+        item.setTitle(this.editing ? `退出${this.settings.viewName}调整模式` : `调整${this.settings.viewName}范围...`)
+          .setIcon('sliders-horizontal')
+          .onClick(() => this.toggleRanges())
+      );
+      if (info instanceof MarkdownView && info.file) {
+        menu.addItem(item =>
+          item.setTitle(`切换到${this.settings.viewName}`)
+            .setIcon('list-checks')
+            .onClick(evt => void this.openApplication(info.file!, evt as MouseEvent, info.leaf))
+        );
+      }
     }));
 
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
@@ -236,23 +301,9 @@ export default class ApplicationPlugin extends Plugin {
       }
     }));
 
-    // Status bar item on desktop
-    this.statusBarItem = this.addStatusBarItem();
-    this.statusBarItem.addClass('app-view-statusbar');
-    this.updateStatusBar();
-    this.statusBarItem.addEventListener('click', () => {
-      const active = this.app.workspace.getActiveViewOfType(MarkdownView);
-      if (active) {
-        this.toggleRanges();
-      } else {
-        new Notice(`请先聚焦一篇详细笔记以调整${this.settings.viewName}范围。`);
-      }
-    });
-
     this.registerEvent(this.app.workspace.on('editor-change', (_editor, info) => {
       this.updateViews(info.file?.path);
       this.updateFloatingBar();
-      this.updateStatusBar();
     }));
 
     this.registerEvent(this.app.vault.on('modify', file => this.updateViews(file.path)));
@@ -297,11 +348,9 @@ export default class ApplicationPlugin extends Plugin {
     this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
       this.syncActions();
       this.updateFloatingBarHost();
-      this.updateStatusBar();
     }));
     this.app.workspace.onLayoutReady(() => {
       this.syncActions();
-      this.updateStatusBar();
     });
   }
 
@@ -376,23 +425,35 @@ export default class ApplicationPlugin extends Plugin {
 
   private include(editor: Editor) {
     this.apply(editor, () => addRangeEdit(editor.getValue(), editor.posToOffset(editor.getCursor('from')), editor.posToOffset(editor.getCursor('to'))));
-    this.updateStatusBar();
+    this.updateFloatingBar();
   }
 
   private exclude(editor: Editor) {
     this.apply(editor, () => removeRangeEdit(editor.getValue(), editor.posToOffset(editor.getCursor())));
-    this.updateStatusBar();
+    this.updateFloatingBar();
   }
 
-  private toggleRanges() {
+  toggleRanges() {
     this.editing = !this.editing;
     this.decorations.refresh();
-    this.updateStatusBar();
     if (this.editing) {
       const active = this.app.workspace.getActiveViewOfType(MarkdownView);
       if (active) this.mountFloatingBar(active);
     } else {
       this.unmountFloatingBar();
+    }
+  }
+
+  private clearAllRanges(view: MarkdownView) {
+    const editor = view.editor;
+    const content = editor.getValue();
+    const cleaned = content.replace(/%%app%%[\r\n]*/g, '').replace(/[\r\n]*%%\/app%%/g, '');
+    if (cleaned !== content) {
+      editor.setValue(cleaned);
+      new Notice(`已清除当前笔记所有${this.settings.viewName}标记（按 Ctrl+Z 可撤销）。`);
+      this.updateFloatingBar();
+    } else {
+      new Notice(`当前笔记未包含${this.settings.viewName}标记。`);
     }
   }
 
@@ -410,13 +471,41 @@ export default class ApplicationPlugin extends Plugin {
       const view = leaf.view;
       if (!(view instanceof MarkdownView)) continue;
 
-      const showEl = view.addAction('list-checks', `切换到${this.settings.viewName}`, (evt: MouseEvent) => {
+      const showEl = view.addAction('list-checks', `切换到${this.settings.viewName}（右键更多选项）`, (evt: MouseEvent) => {
         if (view.file) void this.openApplication(view.file, evt, leaf);
       });
+
+      const onContextMenu = (evt: MouseEvent) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        const menu = new Menu();
+        menu.addItem(item =>
+          item.setTitle(this.editing ? `退出${this.settings.viewName}调整模式` : `调整${this.settings.viewName}范围`)
+            .setIcon('sliders-horizontal')
+            .onClick(() => this.toggleRanges())
+        );
+        if (view.file) {
+          const text = view.editor.getValue();
+          const parsed = parseRanges(text);
+          if (parsed.ranges.length > 0) {
+            menu.addSeparator();
+            menu.addItem(item =>
+              item.setTitle(`清除所有${this.settings.viewName}标记 (${parsed.ranges.length}处)`)
+                .setIcon('trash-2')
+                .setWarning(true)
+                .onClick(() => this.clearAllRanges(view))
+            );
+          }
+        }
+        menu.showAtMouseEvent(evt);
+      };
+
+      showEl.addEventListener('contextmenu', onContextMenu);
 
       this.leafActions.set(leaf, {
         showEl,
         cleanup: () => {
+          showEl.removeEventListener('contextmenu', onContextMenu);
           showEl.remove();
         }
       });
@@ -489,23 +578,6 @@ export default class ApplicationPlugin extends Plugin {
     }
   }
 
-  updateStatusBar() {
-    if (!this.statusBarItem) return;
-    const active = this.app.workspace.getActiveViewOfType(MarkdownView);
-    if (!active?.file) {
-      this.statusBarItem.setText('');
-      this.statusBarItem.style.display = 'none';
-      return;
-    }
-    this.statusBarItem.style.display = '';
-    const text = active.editor.getValue();
-    const parsed = parseRanges(text);
-    const count = parsed.ranges.length;
-    this.statusBarItem.setText(`🎯 ${this.settings.viewName}: ${count} 段`);
-    this.statusBarItem.setAttribute('aria-label', `点击调整${this.settings.viewName}范围`);
-    this.statusBarItem.toggleClass('is-active', this.editing);
-  }
-
   onunload() {
     this.unmountFloatingBar();
     for (const action of this.leafActions.values()) {
@@ -527,14 +599,13 @@ class ApplicationSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('视图名称')
-      .setDesc('在顶栏、状态栏和菜单中显示的称呼（如：行动版、精要版、实践版）')
+      .setDesc('在顶栏、右键菜单和命令面板中显示的称呼（如：行动版、精要版、实践版）')
       .addText(text => text
         .setPlaceholder('行动版')
         .setValue(this.plugin.settings.viewName)
         .onChange(async value => {
           this.plugin.settings.viewName = value.trim() || '行动版';
           await this.plugin.saveSettings();
-          this.plugin.updateStatusBar();
         }));
   }
 }
