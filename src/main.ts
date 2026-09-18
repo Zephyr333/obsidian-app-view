@@ -29,14 +29,21 @@ import {
 
 const VIEW = 'app-view';
 
+export interface MarkdownState {
+  mode: 'source' | 'preview';
+  source?: boolean;
+}
+
 export interface PluginSettings {
   viewName: string;
   noteStates: Record<string, 'detail' | 'app'>;
+  markdownStates: Record<string, MarkdownState>;
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
   viewName: '速查版',
-  noteStates: {}
+  noteStates: {},
+  markdownStates: {}
 };
 
 class ApplicationView extends ItemView {
@@ -142,6 +149,53 @@ class ApplicationView extends ItemView {
         const href = link.getAttribute('data-href') ?? link.getAttribute('href');
         if (href) {
           this.app.workspace.trigger('link-hover', this, link, href, this.path);
+        }
+      }
+    });
+
+    // 5. Native reading-mode copy parity
+    this.registerDomEvent(this.contentEl, 'keydown', (event: KeyboardEvent) => {
+      const isMod = event.ctrlKey || event.metaKey;
+      if (!isMod) return;
+
+      if (event.key.toLowerCase() === 'a') {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+        event.preventDefault();
+        const selection = window.getSelection();
+        if (selection) {
+          selection.removeAllRanges();
+          const range = document.createRange();
+          range.selectNodeContents(this.body);
+          selection.addRange(range);
+          new Notice('已选中速查内容，按 Ctrl+C 复制');
+        }
+      } else if (event.key.toLowerCase() === 'c') {
+        const target = event.target as HTMLElement | null;
+        if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed || selection.toString().trim().length === 0) {
+          event.preventDefault();
+          const bodyText = this.body.innerText.trim();
+          if (bodyText) {
+            void navigator.clipboard.writeText(bodyText).then(() => {
+              new Notice('已复制全文');
+            });
+          }
+        }
+      }
+    });
+
+    this.registerDomEvent(this.contentEl, 'copy', (event: ClipboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest('input, textarea, [contenteditable="true"]')) return;
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed || selection.toString().trim().length === 0) {
+        event.preventDefault();
+        const bodyText = this.body.innerText.trim();
+        if (bodyText && event.clipboardData) {
+          event.clipboardData.setData('text/plain', bodyText);
+          new Notice('已复制全文');
         }
       }
     });
@@ -501,6 +555,7 @@ export default class ApplicationPlugin extends Plugin {
     this.registerEvent(this.app.vault.on('delete', file => {
       this.updateViews(file.path);
       delete this.settings.noteStates[file.path];
+      if (this.settings.markdownStates) delete this.settings.markdownStates[file.path];
       void this.saveSettings();
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
@@ -512,8 +567,12 @@ export default class ApplicationPlugin extends Plugin {
       if (this.settings.noteStates[oldPath]) {
         this.settings.noteStates[file.path] = this.settings.noteStates[oldPath];
         delete this.settings.noteStates[oldPath];
-        void this.saveSettings();
       }
+      if (this.settings.markdownStates?.[oldPath]) {
+        this.settings.markdownStates[file.path] = this.settings.markdownStates[oldPath];
+        delete this.settings.markdownStates[oldPath];
+      }
+      void this.saveSettings();
       this.app.workspace.requestSaveLayout();
     }));
 
@@ -543,6 +602,21 @@ export default class ApplicationPlugin extends Plugin {
           this.settings.noteStates[file.path] = 'detail';
           await this.saveSettings();
         }
+      } else {
+        const savedState = this.settings.markdownStates?.[file.path];
+        if (savedState) {
+          const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
+          if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
+            const currentMode = activeLeaf.view.getMode();
+            const currentSource = (activeLeaf.view.getState() as any)?.source ?? false;
+            if (currentMode !== savedState.mode || currentSource !== savedState.source) {
+              await activeLeaf.setViewState({
+                type: 'markdown',
+                state: { file: file.path, mode: savedState.mode, source: savedState.source }
+              });
+            }
+          }
+        }
       }
     }));
 
@@ -554,7 +628,12 @@ export default class ApplicationPlugin extends Plugin {
         this.settings.noteStates[leaf.view.path] = 'app';
         void this.saveSettings();
       } else if (leaf?.view instanceof MarkdownView && leaf.view.file) {
-        this.settings.noteStates[leaf.view.file.path] = 'detail';
+        const file = leaf.view.file;
+        const mode = leaf.view.getMode();
+        const source = (leaf.view.getState() as any)?.source ?? false;
+        if (!this.settings.markdownStates) this.settings.markdownStates = {};
+        this.settings.markdownStates[file.path] = { mode, source };
+        this.settings.noteStates[file.path] = 'detail';
         void this.saveSettings();
       }
     }));
@@ -606,6 +685,13 @@ export default class ApplicationPlugin extends Plugin {
     const activeLeaf = fromLeaf ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf ?? this.app.workspace.getLeaf(false);
     const targetLeaf = evt ? this.resolveTargetLeaf(evt, activeLeaf) : activeLeaf;
 
+    if (activeLeaf?.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
+      const mode = activeLeaf.view.getMode();
+      const source = (activeLeaf.view.getState() as any)?.source ?? false;
+      if (!this.settings.markdownStates) this.settings.markdownStates = {};
+      this.settings.markdownStates[file.path] = { mode, source };
+    }
+
     this.settings.noteStates[file.path] = 'app';
     await this.saveSettings();
 
@@ -622,6 +708,9 @@ export default class ApplicationPlugin extends Plugin {
     await this.openSource(path, undefined, fromLeaf);
     const active = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (active && active.file?.path === path) {
+      if (active.getMode() !== 'source') {
+        await active.setState({ ...active.getState(), mode: 'source', source: false }, { history: false });
+      }
       const pos = active.editor.offsetToPos(offset);
       active.editor.setCursor(pos);
       active.editor.scrollIntoView({ from: pos, to: pos }, true);
@@ -656,7 +745,16 @@ export default class ApplicationPlugin extends Plugin {
     this.settings.noteStates[file.path] = 'detail';
     await this.saveSettings();
 
-    await targetLeaf.setViewState({ type: 'markdown', state: { file: file.path, mode: 'source', source: false }, active: true });
+    const savedState = this.settings.markdownStates?.[file.path] ?? { mode: 'source', source: false };
+    await targetLeaf.setViewState({
+      type: 'markdown',
+      state: {
+        file: file.path,
+        mode: savedState.mode,
+        source: savedState.source
+      },
+      active: true
+    });
     await this.app.workspace.revealLeaf(targetLeaf);
     this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
   }
@@ -723,7 +821,7 @@ export default class ApplicationPlugin extends Plugin {
 
       const showEl = view.addAction('zap', `左键：查看${this.settings.viewName} | 右键：调整范围`, (evt: MouseEvent) => {
         if (view.file) {
-          const cursorOffset = view.editor.posToOffset(view.editor.getCursor());
+          const cursorOffset = view.getMode() === 'source' ? view.editor.posToOffset(view.editor.getCursor()) : undefined;
           void this.openApplication(view.file, evt, leaf, cursorOffset);
         }
       });

@@ -13,6 +13,7 @@
   max-width: var(--file-line-width);
   margin-inline: auto;
   padding: var(--size-4-6) var(--size-4-6) var(--size-4-2);
+  user-select: none;
 }
 
 .app-view-body {
