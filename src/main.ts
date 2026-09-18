@@ -42,39 +42,14 @@ class ApplicationView extends ItemView {
 
   constructor(leaf: WorkspaceLeaf, private readonly owner: ApplicationPlugin) {
     super(leaf);
-    const backActionEl = this.addAction('file-text', '返回详细版（右键更多选项）', (evt: MouseEvent) => {
+    const backActionEl = this.addAction('file-text', '左键：返回详细版 | 右键：返回并调整范围', (evt: MouseEvent) => {
       void this.owner.openSource(this.path, evt, this.leaf);
     });
-    backActionEl.addEventListener('contextmenu', (evt: MouseEvent) => {
+    backActionEl.addEventListener('contextmenu', async (evt: MouseEvent) => {
       evt.preventDefault();
       evt.stopPropagation();
-      const menu = new Menu();
-      menu.addItem(item =>
-        item.setTitle('返回详细版并调整范围')
-          .setIcon('sliders-horizontal')
-          .onClick(async () => {
-            await this.owner.openSource(this.path, undefined, this.leaf);
-            if (!this.owner.isEditing()) this.owner.toggleRanges();
-          })
-      );
-      menu.addSeparator();
-      menu.addItem(item =>
-        item.setTitle('新标签页打开详细版')
-          .setIcon('file-plus')
-          .onClick(() => {
-            const newLeaf = this.app.workspace.getLeaf('tab');
-            void this.owner.openSource(this.path, undefined, newLeaf);
-          })
-      );
-      menu.addItem(item =>
-        item.setTitle('右侧分栏打开详细版')
-          .setIcon('split')
-          .onClick(() => {
-            const newLeaf = this.app.workspace.getLeaf('split');
-            void this.owner.openSource(this.path, undefined, newLeaf);
-          })
-      );
-      menu.showAtMouseEvent(evt);
+      await this.owner.openSource(this.path, undefined, this.leaf);
+      if (!this.owner.isEditing()) this.owner.toggleRanges();
     });
   }
 
@@ -83,7 +58,7 @@ class ApplicationView extends ItemView {
     const file = this.app.vault.getAbstractFileByPath(this.path);
     return file instanceof TFile ? file.basename : (this.path ? this.path.split('/').pop()?.replace(/\.md$/, '') ?? '' : this.owner.settings.viewName);
   }
-  getIcon() { return 'list-checks'; }
+  getIcon() { return 'target'; }
   getState() { return { path: this.path }; }
   async setState(state: unknown, result: ViewStateResult) {
     if (state && typeof state === 'object' && 'path' in state && typeof state.path === 'string') this.path = state.path;
@@ -250,7 +225,16 @@ export default class ApplicationPlugin extends Plugin {
       editorCallback: editor => this.exclude(editor)
     });
 
-    this.addRibbonIcon('list-checks', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
+    this.addCommand({
+      id: 'clear-all-ranges',
+      name: `清除当前笔记所有${this.settings.viewName}标记`,
+      editorCallback: () => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (view) this.clearAllRanges(view);
+      }
+    });
+
+    this.addRibbonIcon('target', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
       const appView = this.app.workspace.getActiveViewOfType(ApplicationView);
       if (appView) void this.openSource(appView.path, evt, appView.leaf);
       else {
@@ -260,44 +244,52 @@ export default class ApplicationPlugin extends Plugin {
       }
     });
 
-    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor, info) => {
+    this.registerEvent(this.app.workspace.on('editor-menu', (menu, editor) => {
       const hasSelection = editor.somethingSelected();
       const parsed = parseRanges(editor.getValue());
-      const cursorOffset = editor.posToOffset(editor.getCursor());
-      const insideRange = parsed.ranges.some(r => cursorOffset >= r.from && cursorOffset <= r.to);
 
       menu.addSeparator();
       if (hasSelection) {
-        menu.addItem(item =>
-          item.setTitle(`加入${this.settings.viewName}`)
-            .setIcon('plus-circle')
-            .onClick(() => this.include(editor))
-        );
-      }
-      if (insideRange || hasSelection) {
-        menu.addItem(item =>
-          item.setTitle(insideRange && !hasSelection ? `从${this.settings.viewName}移除本段` : `取消${this.settings.viewName}范围`)
-            .setIcon('minus-circle')
-            .onClick(() => this.exclude(editor))
-        );
-      }
-      menu.addItem(item =>
-        item.setTitle(this.editing ? `退出${this.settings.viewName}调整模式` : `调整${this.settings.viewName}范围...`)
-          .setIcon('sliders-horizontal')
-          .onClick(() => this.toggleRanges())
-      );
-      if (info instanceof MarkdownView && info.file) {
-        menu.addItem(item =>
-          item.setTitle(`切换到${this.settings.viewName}`)
-            .setIcon('list-checks')
-            .onClick(evt => void this.openApplication(info.file!, evt as MouseEvent, info.leaf))
-        );
+        const from = editor.posToOffset(editor.getCursor('from'));
+        const to = editor.posToOffset(editor.getCursor('to'));
+        const isEnclosed = parsed.ranges.some(r => from >= r.from && to <= r.to);
+
+        if (isEnclosed) {
+          menu.addItem(item =>
+            item.setTitle(`从${this.settings.viewName}移除选区`)
+              .setIcon('minus-circle')
+              .onClick(() => this.exclude(editor))
+          );
+        } else {
+          menu.addItem(item =>
+            item.setTitle(`加入${this.settings.viewName}`)
+              .setIcon('plus-circle')
+              .onClick(() => this.include(editor))
+          );
+        }
+      } else {
+        const cursorOffset = editor.posToOffset(editor.getCursor());
+        const insideRange = parsed.ranges.some(r => cursorOffset >= r.from && cursorOffset <= r.to);
+
+        if (insideRange) {
+          menu.addItem(item =>
+            item.setTitle(`从${this.settings.viewName}移除本段`)
+              .setIcon('minus-circle')
+              .onClick(() => this.exclude(editor))
+          );
+        } else {
+          menu.addItem(item =>
+            item.setTitle(this.editing ? `退出${this.settings.viewName}调整` : `调整${this.settings.viewName}范围`)
+              .setIcon('sliders-horizontal')
+              .onClick(() => this.toggleRanges())
+          );
+        }
       }
     }));
 
     this.registerEvent(this.app.workspace.on('file-menu', (menu, file) => {
       if (file instanceof TFile && file.extension === 'md') {
-        menu.addItem(item => item.setTitle(`查看${this.settings.viewName}`).setIcon('list-checks').onClick(() => this.openApplication(file)));
+        menu.addItem(item => item.setTitle(`查看${this.settings.viewName}`).setIcon('target').onClick(() => this.openApplication(file)));
       }
     }));
 
@@ -471,33 +463,14 @@ export default class ApplicationPlugin extends Plugin {
       const view = leaf.view;
       if (!(view instanceof MarkdownView)) continue;
 
-      const showEl = view.addAction('list-checks', `切换到${this.settings.viewName}（右键更多选项）`, (evt: MouseEvent) => {
+      const showEl = view.addAction('target', `左键：查看${this.settings.viewName} | 右键：调整范围`, (evt: MouseEvent) => {
         if (view.file) void this.openApplication(view.file, evt, leaf);
       });
 
       const onContextMenu = (evt: MouseEvent) => {
         evt.preventDefault();
         evt.stopPropagation();
-        const menu = new Menu();
-        menu.addItem(item =>
-          item.setTitle(this.editing ? `退出${this.settings.viewName}调整模式` : `调整${this.settings.viewName}范围`)
-            .setIcon('sliders-horizontal')
-            .onClick(() => this.toggleRanges())
-        );
-        if (view.file) {
-          const text = view.editor.getValue();
-          const parsed = parseRanges(text);
-          if (parsed.ranges.length > 0) {
-            menu.addSeparator();
-            menu.addItem(item =>
-              item.setTitle(`清除所有${this.settings.viewName}标记 (${parsed.ranges.length}处)`)
-                .setIcon('trash-2')
-                .setWarning(true)
-                .onClick(() => this.clearAllRanges(view))
-            );
-          }
-        }
-        menu.showAtMouseEvent(evt);
+        this.toggleRanges();
       };
 
       showEl.addEventListener('contextmenu', onContextMenu);
