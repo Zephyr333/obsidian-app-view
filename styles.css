@@ -1,0 +1,67 @@
+.app-view-source-container {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.app-view-source-container > .markdown-source-view,
+.app-view-source-container > .markdown-reading-view {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+.app-view-source-toolbar,
+.app-view-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--size-4-2);
+  padding: var(--size-4-2) var(--size-4-4);
+  border-bottom: var(--border-width) solid var(--background-modifier-border);
+  flex-shrink: 0;
+}
+.app-view-source-toolbar button,
+.app-view-toolbar button {
+  min-height: 44px;
+  min-width: 44px;
+  font-size: var(--font-ui-small);
+}
+.app-view-source-toolbar button:focus-visible,
+.app-view-toolbar button:focus-visible {
+  outline: var(--border-width) solid var(--interactive-accent);
+  outline-offset: var(--size-2-2);
+}
+.app-view-source-toolbar:not(.app-view-is-adjusting) .app-view-adjust-action { display: none; }
+.app-view-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--background-primary);
+}
+.app-view-container { overflow-y: auto; padding: 0 !important; }
+.app-view-title { font-weight: var(--font-semibold); flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.app-view-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+  padding: var(--size-4-3) var(--size-4-4);
+}
+.app-view-body {
+  max-width: var(--file-line-width);
+  margin-inline: auto;
+  padding: var(--size-4-2) var(--size-4-6) var(--size-4-12);
+  overflow-wrap: anywhere;
+}
+.app-view-section + .app-view-section { margin-top: var(--size-4-6); }
+.app-view-section > :first-child { margin-top: 0; }
+.app-view-section table { display: block; overflow-x: auto; }
+.app-view-section input { pointer-events: none; }
+.app-view-marker-quiet { color: var(--text-faint); }
+.app-view-boundary { color: var(--text-faint); font-size: var(--font-smallest); user-select: none; }
+.app-view-marker-edit {
+  color: var(--text-accent);
+  background: var(--background-secondary);
+  border-inline-start: var(--size-2-2) solid var(--interactive-accent);
+}
+.app-view-marker-edit .cm-comment { color: var(--text-accent); }
+.app-view-selected-line { background: var(--background-secondary); }
+.is-mobile .app-view-source-toolbar { padding-inline: var(--size-4-2); }
+.is-mobile .app-view-body { padding-inline: var(--size-4-4); }

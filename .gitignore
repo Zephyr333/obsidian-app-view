@@ -2,5 +2,6 @@ node_modules/
 main.js
 dist/
 artifacts/
+/.obsidian/
 test-vault/.obsidian/
 test-vault/.trash/
