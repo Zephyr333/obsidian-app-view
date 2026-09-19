@@ -12,7 +12,7 @@
   color: var(--inline-title-color, var(--text-normal));
   max-width: var(--file-line-width);
   margin-inline: auto;
-  margin-bottom: var(--size-4-3, 12px);
+  margin-bottom: var(--size-4-6, 24px);
   padding: var(--size-4-6) var(--size-4-6) 0;
   user-select: none;
 }
