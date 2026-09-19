@@ -45,7 +45,7 @@
   margin-top: calc(var(--font-text-size, 16px) * var(--line-height-normal, 1.5));
 }
 
-.app-view-container.has-block-gap .app-view-section + .app-view-section:has(> .app-view-rendered > :first-child:is(h1, h2)) {
+.app-view-container.has-block-gap .app-view-section + .app-view-section:has(> .app-view-rendered > :first-child:is(h1, h2, h3, h4, h5, h6)) {
   margin-top: calc(var(--font-text-size, 16px) * var(--line-height-normal, 1.5) + var(--size-4-4, 16px));
 }
 
@@ -316,6 +316,11 @@
 
 /* Intra-block major headings (H1/H2 preceded by content) keep chapter-level spacing */
 .app-view-rendered > :not(:first-child):is(h1, h2) {
+  margin-top: var(--size-4-4, 16px) !important;
+}
+
+.app-view-rendered > :not(:is(h1, h2, h3, h4, h5, h6, .app-view-blank)) + :is(h3, h4, h5, h6),
+.app-view-rendered > :not(:is(h1, h2, h3, h4, h5, h6, .app-view-blank)) + .app-view-blank + :is(h3, h4, h5, h6) {
   margin-top: var(--size-4-4, 16px) !important;
 }
 
