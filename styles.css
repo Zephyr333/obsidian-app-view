@@ -230,7 +230,7 @@
 }
 
 /* Header action active state */
-.view-actions .clickable-icon.is-active {
+.view-actions .app-view-toggle.is-active {
   color: var(--interactive-accent);
   background: var(--background-modifier-hover);
 }
@@ -239,4 +239,40 @@
   padding-inline: var(--size-4-4);
 }
 
+.app-view-section:focus-within .app-view-locate-btn {
+  opacity: 1;
+}
 
+.app-view-container button:focus-visible,
+.app-view-floating-bar button:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+.app-view-floating-bar {
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.is-mobile .app-view-locate-btn,
+.is-mobile .app-view-manage-del,
+.is-mobile .app-view-floating-btn {
+  min-width: 44px;
+  min-height: 44px;
+}
+
+.is-mobile .app-view-section {
+  padding-top: var(--size-4-8);
+}
+
+.is-mobile .app-view-floating-bar {
+  width: calc(100% - 32px);
+  bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+}
+
+.is-mobile .app-view-container.is-managing .app-view-body {
+  padding-bottom: 280px;
+}
+
+.app-view-rendered > :first-child { margin-top: 0; }
+.app-view-rendered img, .app-view-rendered video { max-width: 100%; }

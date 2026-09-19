@@ -7,9 +7,28 @@ import {
   removeSpecificRangeEdit,
   detectBlockAt,
   toggleCheckboxInSource,
+  clearRangeMarkers,
   type TextEdit
 } from '../src/ranges';
 const apply = (text: string, edit: TextEdit) => text.slice(0, edit.from) + edit.text + text.slice(edit.to);
+
+test('clearing markers preserves code examples, inline literals, blank lines and CRLF', () => {
+  const source='Before\r\n\r\n%%app%%\r\n\r\nText\r\n\r\n%%/app%%\r\n```md\r\n%%app%%\r\nexample\r\n%%/app%%\r\n```\r\ninline %%app%% remains';
+  assert.equal(clearRangeMarkers(source),'Before\r\n\r\n\r\nText\r\n\r\n```md\r\n%%app%%\r\nexample\r\n%%/app%%\r\n```\r\ninline %%app%% remains');
+});
+test('task indexing ignores fenced examples and supports ordered and quoted tasks', () => {
+  const source='%%app%%\n```md\n- [ ] example\n```\n1. [ ] ordered\n> - [ ] quoted\n- [ ] plain\n%%/app%%';
+  assert.equal(toggleCheckboxInSource(source,0,0),source.replace('1. [ ]','1. [x]'));
+  assert.equal(toggleCheckboxInSource(source,0,1),source.replace('> - [ ]','> - [x]'));
+  assert.equal(toggleCheckboxInSource(source,0,2),source.replace('- [ ] plain','- [x] plain'));
+});
+test('code block detection from closing fence and heading-like code includes the whole block', () => {
+  const source='before\n```md\n# fake heading\n- example\n```\nafter';
+  for (const offset of [source.indexOf('# fake'),source.lastIndexOf('```')]) {
+    const block=detectBlockAt(source,offset)!;
+    assert.equal(source.slice(block.from,block.to),'```md\n# fake heading\n- example\n```\n');
+  }
+});
 
 test('collects headings, multi-line lists and paragraphs in source order', () => {
   const source = '背景\n%%app%%\n## 步骤\n\n- 一\n  - 子项\n\n两行\n正文\n%%/app%%\n说明\n%%app%%\n最后\n%%/app%%';

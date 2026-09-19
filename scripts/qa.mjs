@@ -1,135 +1,50 @@
-import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
-import { connect } from './cdp.mjs';
+import { spawn } from 'node:child_process';
 
-const cdp = await connect();
-const results = [];
-const run = async (name, fn) => { await fn(); results.push(name); console.log(`PASS ${name}`); };
-const evaluate = cdp.evaluate;
-const waitFor = async expression => {
-  const deadline = Date.now() + 6000;
-  while (Date.now() < deadline) { if (await evaluate(expression)) return; await new Promise(r => setTimeout(r, 80)); }
-  throw new Error(`Timed out: ${expression}`);
-};
-const click = async selector => {
-  await waitFor(`document.querySelector(${JSON.stringify(selector)})?.checkVisibility()`);
-  const rect = await evaluate(`(()=>{const el=document.querySelector(${JSON.stringify(selector)}); if(!el)throw new Error('Missing button'); const r=el.getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...rect });
-  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, ...rect });
-};
-const screenshot = async name => { const result = await cdp.send('Page.captureScreenshot'); await fs.writeFile(`artifacts/${name}.png`, Buffer.from(result.data, 'base64')); };
-const sourceView = 'app.workspace.getLeavesOfType("markdown").find(l=>l.view.file?.path==="开始体验.md").view';
-const appView = 'app.workspace.getLeavesOfType("app-view")[0].view';
+const suites = [
+  { name: 'navigation', script: 'scripts/qa-navigation.mjs', artifact: 'artifacts/qa-navigation-results.json' },
+  { name: 'features', script: 'scripts/qa-features.mjs', artifact: 'artifacts/qa-features-results.json' },
+  { name: 'extra', script: 'scripts/qa-extra.mjs', artifact: 'artifacts/qa-extra-results.json' },
+  { name: 'mobile', script: 'scripts/qa-mobile.mjs', artifact: 'artifacts/qa-mobile-results.json' },
+  { name: 'upgrade', script: 'scripts/qa-upgrade.mjs', artifact: 'artifacts/qa-upgrade-results.json' },
+  { name: 'restart', script: 'scripts/qa-restart.mjs', artifact: 'artifacts/qa-restart-results.json' }
+];
 
-try {
-  if (await evaluate('app.isMobile')) {
-    await evaluate('app.emulateMobile(false)');
-    await new Promise(r => setTimeout(r, 500));
-    await waitFor('typeof app!=="undefined" && app.workspace?.layoutReady && !!app.plugins.plugins["app-view"] && !app.isMobile');
-    await cdp.send('Emulation.clearDeviceMetricsOverride');
+console.log('=== Starting Full QA Verification Suite (v1.0.0) ===\n');
+
+const allResults = [];
+const summary = {
+  version: '1.0.0',
+  obsidian: '1.13.7',
+  timestamp: new Date().toISOString(),
+  actualPhoneTested: false,
+  suites: {}
+};
+
+for (const suite of suites) {
+  console.log(`\n--- Running Suite: ${suite.name} (${suite.script}) ---`);
+  await new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [suite.script], { stdio: 'inherit' });
+    child.on('exit', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Suite ${suite.name} failed with exit code ${code}`));
+    });
+  });
+
+  try {
+    const content = JSON.parse(await fs.readFile(suite.artifact, 'utf8'));
+    summary.suites[suite.name] = content.results ?? content;
+    if (Array.isArray(content.results)) {
+      allResults.push(...content.results);
+    }
+  } catch (err) {
+    console.warn(`Warning: Could not read artifact for ${suite.name}: ${err.message}`);
   }
-  await evaluate('require("electron").remote.getCurrentWindow().setSize(1100,850)');
-  await cdp.send('Emulation.clearDeviceMetricsOverride');
-  await evaluate('app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath("开始体验.md"))');
-  await evaluate(`(()=>{window.__qaErrors=[];window.addEventListener('error',e=>window.__qaErrors.push(e.message));window.addEventListener('unhandledrejection',e=>window.__qaErrors.push(String(e.reason)));return true})()`);
-  await run('Live Preview stays active and range adjustment shows real boundaries', async () => {
-    await evaluate(`app.workspace.revealLeaf(${sourceView}.leaf)`);
-    if (await evaluate('app.plugins.plugins["app-view"].editing')) await evaluate('app.commands.executeCommandById("app-view:toggle-ranges")');
-    assert.equal(await evaluate(`${sourceView}.getState().source`), false);
-    // Markers are completely hidden when not editing (no dots, no empty line widgets)
-    assert.equal(await evaluate('document.querySelectorAll(".app-view-marker-edit").length'), 0);
-    await click('.view-actions [aria-label="调整应用范围"]');
-    await waitFor('document.querySelectorAll(".app-view-marker-edit").length > 0');
-    assert.ok(await evaluate('document.querySelectorAll(".app-view-floating-bar").length > 0 && document.querySelectorAll(".app-view-selected-line").length > 0'));
-    await screenshot('ranges');
-    await click('.app-view-floating-btn.mod-cta');
-    await waitFor('document.querySelectorAll(".app-view-floating-bar").length === 0');
-  });
-  await run('Application renders selected ranges in order, excluding explanations', async () => {
-    await click('.view-actions [aria-label="查看应用版"]');
-    await waitFor('document.querySelector(".app-view-status")?.textContent.startsWith("2 个范围")');
-    const text = await evaluate('document.querySelector(".app-view-body").textContent');
-    assert.ok(text.includes('确认条件') && text.includes('留下反馈'));
-    assert.ok(text.indexOf('确认条件') < text.indexOf('留下反馈'));
-    assert.ok(!text.includes('这里是详细推理'));
-    assert.equal(await evaluate('document.querySelectorAll(".app-view-body table").length'), 1);
-    assert.ok(await evaluate('[...document.querySelectorAll(".app-view-body input")].every(e=>e.disabled)'));
-    await screenshot('application');
-  });
-  await run('Return button preserves the editor and selection', async () => {
-    await click('.app-view-return-btn');
-    await waitFor('app.workspace.activeLeaf.view.getViewType()==="markdown"');
-    assert.equal(await evaluate('app.workspace.activeLeaf.view.getState().source'), false);
-  });
-  await run('Toolbar wraps a selection, supports undo, redo, and cancellation', async () => {
-    await evaluate(`(()=>{const e=${sourceView}.editor;window.__qaOriginal=e.getValue();const s=e.getValue();const from=s.indexOf('选中这一整段');const to=s.indexOf(String.fromCharCode(10),from);e.setSelection(e.offsetToPos(from),e.offsetToPos(to));e.focus()})()`);
-    await click('.view-actions [aria-label="调整应用范围"]');
-    await waitFor('document.querySelector(".app-view-floating-bar") !== null');
-    await click('.app-view-floating-bar button:nth-of-type(1)'); // 加入选区
-    assert.equal(await evaluate(`${sourceView}.editor.getValue().split('%%app%%').length`), 5); // three ranges plus a fenced example
-    await evaluate(`${sourceView}.editor.undo()`);
-    assert.equal(await evaluate(`${sourceView}.editor.getValue()===window.__qaOriginal`), true);
-    await evaluate(`${sourceView}.editor.redo()`);
-    await evaluate(`(()=>{const e=${sourceView}.editor;e.setCursor(e.offsetToPos(e.getValue().indexOf('选中这一整段')));e.focus()})()`);
-    await click('.app-view-floating-bar button:nth-of-type(2)'); // 取消范围
-    assert.equal(await evaluate(`${sourceView}.editor.getValue()===window.__qaOriginal`), true);
-    await click('.app-view-floating-btn.mod-cta'); // 完成调整
-  });
-  await run('Editing and undo automatically update the already open projection', async () => {
-    await evaluate(`(()=>{const e=${sourceView}.editor;const p=e.getValue().indexOf('先明确');e.replaceRange('自动同步验证：',e.offsetToPos(p))})()`);
-    await waitFor('document.querySelector(".app-view-body")?.textContent.includes("自动同步验证：")');
-    await evaluate(`${sourceView}.editor.undo()`);
-    await waitFor('!document.querySelector(".app-view-body")?.textContent.includes("自动同步验证：")');
-  });
-  await run('Cross-boundary deletion and undo do not corrupt the document', async () => {
-    await click('.view-actions [aria-label="调整应用范围"]');
-    await waitFor('document.querySelector(".app-view-marker-edit") !== null');
-    await evaluate(`(()=>{const e=${sourceView}.editor;const s=e.getValue();const p=s.indexOf('%%app%%');e.setSelection(e.offsetToPos(p),e.offsetToPos(p+10));e.focus()})()`);
-    await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Backspace', code: 'Backspace', windowsVirtualKeyCode: 8 });
-    await waitFor('document.querySelector(".app-view-status")?.textContent.includes("范围需要修正")');
-    assert.equal(await evaluate('document.querySelector(".app-view-body").textContent'), '');
-    await evaluate(`${sourceView}.editor.undo()`);
-    assert.equal(await evaluate(`${sourceView}.editor.getValue()===window.__qaOriginal`), true);
-    await waitFor('document.querySelector(".app-view-status")?.textContent.startsWith("2 个范围")');
-    await click('.app-view-floating-btn.mod-cta');
-  });
-  await run('Rapid edits settle on the latest contents', async () => {
-    await evaluate(`(()=>{const e=${sourceView}.editor;const p=e.getValue().indexOf('先明确');for(let i=0;i<12;i++){e.replaceRange('快',e.offsetToPos(p))}})()`);
-    await waitFor('document.querySelector(".app-view-body").textContent.includes("快".repeat(12))');
-    await evaluate(`${sourceView}.editor.setValue(window.__qaOriginal)`);
-    await waitFor('!document.querySelector(".app-view-body").textContent.includes("快快")');
-  });
-  await run('Renaming a source preserves its projection association', async () => {
-    await evaluate('app.vault.rename(app.vault.getAbstractFileByPath("开始体验.md"),"临时重命名.md")');
-    await waitFor(`${appView}.path==="临时重命名.md"`);
-    await evaluate('app.vault.rename(app.vault.getAbstractFileByPath("临时重命名.md"),"开始体验.md")');
-    await waitFor(`${appView}.path==="开始体验.md"`);
-  });
-  await run('Mobile emulation provides working switch and return buttons without overflow', async () => {
-    assert.deepEqual(await evaluate('window.__qaErrors'), []);
-    await evaluate('app.emulateMobile(true)');
-    await cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
-    await new Promise(r => setTimeout(r, 500));
-    await waitFor('typeof app!=="undefined" && app.workspace?.layoutReady && !!app.plugins.plugins["app-view"] && app.isMobile');
-    await evaluate('(()=>{window.__qaErrors=[];window.addEventListener("error",e=>window.__qaErrors.push(e.message));window.addEventListener("unhandledrejection",e=>window.__qaErrors.push(String(e.reason)))})()');
-    await evaluate('app.workspace.getLeaf(false).openFile(app.vault.getAbstractFileByPath("开始体验.md"))');
-    await evaluate('app.workspace.leftSplit.collapse();app.workspace.rightSplit.collapse()');
-    await waitFor('document.body.classList.contains("is-mobile")');
-    await click('.view-actions [aria-label="查看应用版"]');
-    await waitFor('app.workspace.activeLeaf.view.getViewType()==="app-view"');
-    const widths = await evaluate('(()=>{const e=document.querySelector(".app-view-container");return {client:e.clientWidth,scroll:e.scrollWidth,button:document.querySelector(".app-view-return-btn").getBoundingClientRect().height}})()');
-    assert.ok(widths.scroll <= widths.client + 1, JSON.stringify(widths));
-    assert.ok(widths.button >= 30);
-    await screenshot('mobile');
-    await click('.app-view-return-btn');
-    await waitFor('app.workspace.activeLeaf.view.getViewType()==="markdown"');
-    assert.equal(await evaluate('app.workspace.activeLeaf.view.getState().source'), false);
-    assert.deepEqual(await evaluate('window.__qaErrors'), []);
-    await evaluate('app.emulateMobile(false)');
-    await cdp.send('Emulation.clearDeviceMetricsOverride');
-    await new Promise(r => setTimeout(r, 500));
-    await waitFor('typeof app!=="undefined" && app.workspace?.layoutReady && !!app.plugins.plugins["app-view"] && !app.isMobile');
-  });
-  await fs.writeFile('artifacts/qa-results.json', JSON.stringify({ version: '0.1.0', obsidian: '1.13.7', results, actualPhoneTested: false }, null, 2));
-} finally { cdp.close(); }
+}
+
+summary.totalPassed = allResults.length;
+summary.allPassed = true;
+
+await fs.writeFile('artifacts/qa-results.json', JSON.stringify(summary, null, 2), 'utf8');
+
+console.log(`\n=== QA Complete: All ${allResults.length} integration tests passed! ===`);

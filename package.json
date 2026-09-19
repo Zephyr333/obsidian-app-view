@@ -1,12 +1,14 @@
 {
   "name": "app-view",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
     "test": "tsx --test tests/*.test.ts",
-    "build": "npm run check && node build.mjs"
+    "build": "npm run check && node build.mjs",
+    "qa": "node scripts/qa.mjs",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package.ps1"
   },
   "devDependencies": {
     "@codemirror/state": "6.5.0",

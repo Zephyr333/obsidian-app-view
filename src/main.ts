@@ -2,7 +2,6 @@ import {
   App,
   Component,
   FileView,
-  ItemView,
   Keymap,
   MarkdownRenderer,
   MarkdownView,
@@ -14,8 +13,9 @@ import {
   TFile,
   setIcon,
   type Editor,
+  type Command,
   type ViewStateResult,
-  type WorkspaceLeaf
+  WorkspaceLeaf
 } from 'obsidian';
 import { rangeExtension } from './editor';
 import {
@@ -25,27 +25,13 @@ import {
   removeRangeEdit,
   removeSpecificRangeEdit,
   toggleCheckboxInSource,
+  clearRangeMarkers,
+  taskOffsets,
   type TextEdit
 } from './ranges';
+import { loadPreferences, remapPreferences, SerialQueue, type MarkdownState, type PluginSettings } from './state';
 
 const VIEW = 'app-view';
-
-export interface MarkdownState {
-  mode: 'source' | 'preview';
-  source?: boolean;
-}
-
-export interface PluginSettings {
-  viewName: string;
-  noteStates: Record<string, 'detail' | 'app'>;
-  markdownStates: Record<string, MarkdownState>;
-}
-
-const DEFAULT_SETTINGS: PluginSettings = {
-  viewName: '速查版',
-  noteStates: {},
-  markdownStates: {}
-};
 
 class ApplicationView extends FileView {
   path = '';
@@ -58,13 +44,15 @@ class ApplicationView extends FileView {
   private timerWindow?: Window;
   private targetScrollOffset?: number;
   private managing = false;
+  private backActionEl: HTMLElement;
+  private copyActionEl: HTMLElement;
   private floatingBar?: { el: HTMLElement; cleanup: () => void };
 
   constructor(leaf: WorkspaceLeaf, private readonly owner: ApplicationPlugin) {
     super(leaf);
     this.navigation = true;
     this.allowNoFile = false;
-    const backActionEl = this.addAction('file-text', '左键：返回详细版 | 右键：管理速查版', (evt: MouseEvent) => {
+    const backActionEl = this.backActionEl = this.addAction('file-text', `左键：返回详细版 | 右键：管理${this.owner.settings.viewName}`, (evt: MouseEvent) => {
       void this.owner.openSource(this.path, evt, this.leaf);
     });
     backActionEl.addEventListener('contextmenu', (evt: MouseEvent) => {
@@ -72,7 +60,7 @@ class ApplicationView extends FileView {
       evt.stopPropagation();
       this.toggleManaging();
     });
-    this.addAction('copy', `复制${this.owner.settings.viewName}纯文本`, async () => {
+    this.copyActionEl = this.addAction('copy', `复制${this.owner.settings.viewName}纯文本`, async () => {
       await this.copyContent();
     });
   }
@@ -100,18 +88,10 @@ class ApplicationView extends FileView {
     return file instanceof TFile ? file.basename : (this.path ? this.path.split('/').pop()?.replace(/\.md$/, '') ?? '' : this.owner.settings.viewName);
   }
   getIcon() { return 'zap'; }
-  getState() { return { path: this.path, file: this.path }; }
+  getState() { return { ...super.getState(), file: this.file?.path ?? this.path }; }
   async setState(state: unknown, result: ViewStateResult) {
-    if (state && typeof state === 'object' && 'path' in state && typeof state.path === 'string') {
-      this.path = state.path;
-      const file = this.app.vault.getAbstractFileByPath(this.path);
-      this.file = file instanceof TFile ? file : null;
-    }
-    if (state && typeof state === 'object' && 'file' in state && typeof (state as any).file === 'string') {
-      this.path = (state as any).file;
-      const file = this.app.vault.getAbstractFileByPath(this.path);
-      this.file = file instanceof TFile ? file : null;
-    }
+    // Older workspaces used `path`; FileView owns file loading and lifecycle events.
+    if (state && typeof state === 'object' && 'path' in state && !('file' in state)) state = { ...state, file: state.path };
     if (state && typeof state === 'object' && 'targetOffset' in state && typeof state.targetOffset === 'number') {
       this.targetScrollOffset = state.targetOffset;
     }
@@ -133,22 +113,28 @@ class ApplicationView extends FileView {
       if (!target) return;
 
       // 1. Task Checkbox toggle and write back to source
-      if (target instanceof HTMLInputElement && target.type === 'checkbox') {
+      if (target.instanceOf(HTMLInputElement) && target.type === 'checkbox') {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (!target.matches('.task-list-item-checkbox') || target.closest('.internal-embed')) return;
         const section = target.closest<HTMLElement>('.app-view-section');
         if (!section) return;
         const rangeIndex = parseInt(section.dataset.rangeIndex ?? '-1', 10);
         if (rangeIndex === -1) return;
 
-        const allCheckboxes = Array.from(section.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'));
+        const allCheckboxes = Array.from(section.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox')).filter(e => !e.closest('.internal-embed'));
         const checkboxIndex = allCheckboxes.indexOf(target);
         if (checkboxIndex === -1) return;
 
         const file = this.app.vault.getAbstractFileByPath(this.path);
         if (file instanceof TFile) {
-          await this.app.vault.process(file, content => {
+          await this.owner.editSource(file, this.lastText, content => {
             const updated = toggleCheckboxInSource(content, rangeIndex, checkboxIndex);
-            return updated ?? content;
+            if (updated === undefined) throw new Error('无法对应源任务，请刷新后重试。');
+            return updated;
           });
+          this.lastText = undefined;
+          await this.refresh();
         }
         return;
       }
@@ -191,10 +177,10 @@ class ApplicationView extends FileView {
         const target = event.target as HTMLElement | null;
         if (target?.closest('input, textarea, [contenteditable="true"]')) return;
         event.preventDefault();
-        const selection = window.getSelection();
+        const selection = this.contentEl.ownerDocument.getSelection();
         if (selection) {
           selection.removeAllRanges();
-          const range = document.createRange();
+          const range = this.contentEl.ownerDocument.createRange();
           range.selectNodeContents(this.body);
           selection.addRange(range);
           new Notice('已选中速查内容，按 Ctrl+C 复制');
@@ -202,12 +188,12 @@ class ApplicationView extends FileView {
       } else if (event.key.toLowerCase() === 'c') {
         const target = event.target as HTMLElement | null;
         if (target?.closest('input, textarea, [contenteditable="true"]')) return;
-        const selection = window.getSelection();
+        const selection = this.contentEl.ownerDocument.getSelection();
         if (!selection || selection.isCollapsed || selection.toString().trim().length === 0) {
           event.preventDefault();
-          const bodyText = this.body.innerText.trim();
+          const bodyText = this.plainText();
           if (bodyText) {
-            void navigator.clipboard.writeText(bodyText).then(() => {
+            void this.contentEl.ownerDocument.defaultView?.navigator.clipboard.writeText(bodyText).then(() => {
               new Notice('已复制全文');
             });
           }
@@ -218,14 +204,22 @@ class ApplicationView extends FileView {
     this.registerDomEvent(this.contentEl, 'copy', (event: ClipboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (target?.closest('input, textarea, [contenteditable="true"]')) return;
-      const selection = window.getSelection();
+      const selection = this.contentEl.ownerDocument.getSelection();
       if (!selection || selection.isCollapsed || selection.toString().trim().length === 0) {
         event.preventDefault();
-        const bodyText = this.body.innerText.trim();
+        const bodyText = this.plainText();
         if (bodyText && event.clipboardData) {
           event.clipboardData.setData('text/plain', bodyText);
           new Notice('已复制全文');
         }
+      } else if (event.clipboardData) {
+        const range = selection.getRangeAt(0);
+        if (range.startContainer === this.body && range.startOffset === 0 && range.endContainer === this.body && range.endOffset === this.body.childNodes.length) {
+          event.clipboardData.setData('text/plain', this.plainText());
+          event.preventDefault();
+        }
+        // Keep native selection copying (including line/table formatting) for
+        // an ordinary partial selection.
       }
     });
 
@@ -361,7 +355,7 @@ class ApplicationView extends FileView {
           const delBtn = manageHeader.createEl('button', { cls: 'app-view-manage-del', text: '移除本段' });
           delBtn.addEventListener('click', (e) => {
             e.stopPropagation();
-            void this.owner.removeRangeAt(this.path, range.from, range.to);
+            void this.owner.removeRangeAt(this.path, range.from, range.to, text);
           });
 
           // Bidirectional locate button
@@ -382,7 +376,13 @@ class ApplicationView extends FileView {
             }
           });
 
-          await MarkdownRenderer.render(this.app, range.text, section, file.path, component);
+          const content = section.createDiv({cls: 'app-view-rendered'});
+          await MarkdownRenderer.render(this.app, range.text, content, file.path, component);
+          const tasks = Array.from(content.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox')).filter(e => !e.closest('.internal-embed'));
+          if (tasks.length !== taskOffsets(range.text).length) {
+            for (const task of tasks) { task.disabled = true; task.title = '此结构无法安全对应源任务，请在详细版修改。'; }
+          }
+          for (const input of Array.from(content.querySelectorAll<HTMLInputElement>('input:not(.task-list-item-checkbox), .internal-embed input'))) input.disabled = true;
           if (generation !== this.generation) { this.removeChild(component); return; }
         }
         for (const editable of Array.from(staging.querySelectorAll<HTMLElement>('[contenteditable]'))) editable.setAttribute('contenteditable', 'false');
@@ -393,6 +393,7 @@ class ApplicationView extends FileView {
       this.rendered = component;
       this.body.replaceChildren(...Array.from(staging.childNodes));
       this.lastText = text;
+      if (this.managing) this.mountQuickViewFloatingBar();
 
       // Scroll to target offset if requested
       if (this.targetScrollOffset !== undefined) {
@@ -403,7 +404,7 @@ class ApplicationView extends FileView {
           const from = parseInt(s.dataset.from ?? '0', 10);
           const to = parseInt(s.dataset.to ?? '0', 10);
           return targetOffset >= from && targetOffset <= to;
-        }) ?? sections[0];
+        }) ?? sections.reduce<HTMLElement | undefined>((best, section) => !best || Math.abs(Number(section.dataset.from) - targetOffset) < Math.abs(Number(best.dataset.from) - targetOffset) ? section : best, undefined);
         if (match) {
           match.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
@@ -424,13 +425,24 @@ class ApplicationView extends FileView {
     if (!(file instanceof TFile)) return;
     const text = await this.owner.sourceText(file);
     const parsed = parseRanges(text);
+    if (parsed.errors.length) { new Notice(parsed.errors[0]); return; }
     if (parsed.ranges.length === 0) {
       new Notice(`当前没有可复制的${this.owner.settings.viewName}内容。`);
       return;
     }
-    const cleanContent = parsed.ranges.map(r => r.text.trim()).filter(Boolean).join('\n\n');
-    await navigator.clipboard.writeText(cleanContent);
+    if (text !== this.lastText) await this.refresh();
+    await this.contentEl.ownerDocument.defaultView?.navigator.clipboard.writeText(this.plainText());
     new Notice(`已复制${this.owner.settings.viewName}纯文本到剪贴板`);
+  }
+
+  private plainText() {
+    return Array.from(this.body.querySelectorAll<HTMLElement>('.app-view-rendered')).map(el => el.innerText.trim()).filter(Boolean).join('\n\n');
+  }
+
+  updateName() {
+    this.backActionEl.setAttribute('aria-label', `左键：返回详细版 | 右键：管理${this.owner.settings.viewName}`);
+    this.copyActionEl.setAttribute('aria-label', `复制${this.owner.settings.viewName}纯文本`);
+    if (this.managing) this.mountQuickViewFloatingBar();
   }
 
   private disposeRendering() { if (this.rendered) this.removeChild(this.rendered); this.rendered = undefined; }
@@ -438,7 +450,7 @@ class ApplicationView extends FileView {
 }
 
 export default class ApplicationPlugin extends Plugin {
-  settings: PluginSettings = DEFAULT_SETTINGS;
+  settings: PluginSettings = loadPreferences(null);
   private editing = false;
   decorations = rangeExtension(
     () => this.editing,
@@ -446,14 +458,16 @@ export default class ApplicationPlugin extends Plugin {
   );
   private leafActions = new Map<WorkspaceLeaf, { showEl: HTMLElement; cleanup: () => void }>();
   private floatingBar?: { el: HTMLElement; countEl: HTMLElement; cleanup: () => void };
-  private pendingModeRestorations = new Map<string, MarkdownState>();
+  private readonly saves = new SerialQueue();
+  private readonly navigation = new WeakMap<WorkspaceLeaf, SerialQueue>();
+  private readonly observedMarkdown = new WeakMap<WorkspaceLeaf, {path: string; mode: string; source: boolean}>();
+  private readonly navigating = new WeakSet<WorkspaceLeaf>();
+  private stopped = false;
+  private namedCommands: {command: Command; label: string}[] = [];
+  private ribbonEl?: HTMLElement;
 
   isEditing() {
     return this.editing;
-  }
-
-  setPendingModeRestoration(path: string, state: MarkdownState) {
-    this.pendingModeRestorations.set(path, state);
   }
 
   async onload() {
@@ -464,7 +478,7 @@ export default class ApplicationPlugin extends Plugin {
 
     this.addSettingTab(new ApplicationSettingTab(this.app, this));
 
-    this.addCommand({
+    this.addNamedCommand({
       id: 'show-application',
       name: `查看${this.settings.viewName}`,
       checkCallback: checking => {
@@ -475,25 +489,28 @@ export default class ApplicationPlugin extends Plugin {
       }
     });
 
-    this.addCommand({
+    this.addNamedCommand({
       id: 'toggle-ranges',
       name: `显示／隐藏${this.settings.viewName}范围`,
-      callback: () => this.toggleRanges()
+      callback: () => {
+        const quick = this.app.workspace.getActiveViewOfType(ApplicationView);
+        if (quick) quick.toggleManaging(); else this.toggleRanges();
+      }
     });
 
-    this.addCommand({
+    this.addNamedCommand({
       id: 'include-selection',
       name: `加入${this.settings.viewName}`,
       editorCallback: editor => this.include(editor)
     });
 
-    this.addCommand({
+    this.addNamedCommand({
       id: 'exclude-range',
       name: `取消当前${this.settings.viewName}范围`,
       editorCallback: editor => this.exclude(editor)
     });
 
-    this.addCommand({
+    this.addNamedCommand({
       id: 'clear-all-ranges',
       name: `清除当前笔记所有${this.settings.viewName}标记`,
       editorCallback: () => {
@@ -502,7 +519,7 @@ export default class ApplicationPlugin extends Plugin {
       }
     });
 
-    this.addCommand({
+    this.addNamedCommand({
       id: 'copy-application-content',
       name: `复制当前${this.settings.viewName}纯文本`,
       checkCallback: checking => {
@@ -513,7 +530,7 @@ export default class ApplicationPlugin extends Plugin {
       }
     });
 
-    this.addRibbonIcon('zap', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
+    this.ribbonEl = this.addRibbonIcon('zap', `详细版／${this.settings.viewName}`, (evt: MouseEvent) => {
       const appView = this.app.workspace.getActiveViewOfType(ApplicationView);
       if (appView) void this.openSource(appView.path, evt, appView.leaf);
       else {
@@ -588,126 +605,114 @@ export default class ApplicationPlugin extends Plugin {
     this.registerEvent(this.app.vault.on('modify', file => this.updateViews(file.path)));
     this.registerEvent(this.app.vault.on('delete', file => {
       this.updateViews(file.path);
-      delete this.settings.noteStates[file.path];
-      if (this.settings.markdownStates) delete this.settings.markdownStates[file.path];
+      remapPreferences(this.settings, file.path);
       void this.saveSettings();
     }));
     this.registerEvent(this.app.vault.on('rename', (file, oldPath) => {
+      remapPreferences(this.settings, oldPath, file.path);
       for (const view of this.applicationViews()) {
         if (view.path === oldPath) view.path = file.path;
         else if (view.path.startsWith(oldPath + '/')) view.path = file.path + view.path.slice(oldPath.length);
         view.scheduleRefresh();
       }
-      if (this.settings.noteStates[oldPath]) {
-        this.settings.noteStates[file.path] = this.settings.noteStates[oldPath];
-        delete this.settings.noteStates[oldPath];
-      }
-      if (this.settings.markdownStates?.[oldPath]) {
-        this.settings.markdownStates[file.path] = this.settings.markdownStates[oldPath];
-        delete this.settings.markdownStates[oldPath];
-      }
       void this.saveSettings();
       this.app.workspace.requestSaveLayout();
     }));
 
-    // State persistence on opening notes
-    this.registerEvent(this.app.workspace.on('file-open', async file => {
-      if (!(file instanceof TFile) || file.extension !== 'md') return;
-
-      const pending = this.pendingModeRestorations.get(file.path);
-      if (pending) {
-        const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
-        if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
-          await this.applyMarkdownModeWhenReady(activeLeaf, file.path, pending);
-          return;
-        }
-      }
-
-      if (this.settings.noteStates[file.path] === 'app') {
-        const alreadyApp = this.app.workspace.getLeavesOfType(VIEW).some(l => l.view instanceof ApplicationView && l.view.path === file.path);
-        if (alreadyApp) return;
-
-        let targetLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path);
-        if (!targetLeaf) {
-          const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
-          if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
-            targetLeaf = activeLeaf;
-          }
-        }
-        if (!targetLeaf) {
-          this.app.workspace.iterateRootLeaves(leaf => {
-            if (!targetLeaf && leaf.view instanceof MarkdownView && leaf.view.file?.path === file.path) {
-              targetLeaf = leaf;
-            }
-          });
-        }
-        if (targetLeaf && targetLeaf.view instanceof MarkdownView) {
-          await targetLeaf.setViewState({ type: VIEW, state: { path: file.path, file: file.path }, active: true });
-          await this.app.workspace.revealLeaf(targetLeaf);
-          this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-          return;
-        }
-      } else {
-        let savedState = this.settings.markdownStates?.[file.path];
-        const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
-        if (!savedState && hasReaderMode) {
-          savedState = { mode: 'preview', source: false };
-        }
-        if (savedState) {
-          const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
-          if (activeLeaf && activeLeaf.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path) {
-            const currentMode = activeLeaf.view.getMode();
-            const currentSource = (activeLeaf.view.getState() as any)?.source ?? false;
-            if (currentMode !== savedState.mode || (savedState.mode === 'source' && currentSource !== savedState.source)) {
-              await this.applyMarkdownModeWhenReady(activeLeaf, file.path, savedState);
-            }
-          }
-        }
-      }
-    }));
-
+    this.installNavigation();
+    // These events observe only. Calling setViewState inside file-open loses the
+    // request because the native openFile/setViewState transaction is still busy.
     this.registerEvent(this.app.workspace.on('layout-change', () => {
       this.syncActions();
-      const activeLeaf = this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf;
-      if (activeLeaf?.view instanceof MarkdownView && activeLeaf.view.file) {
-        const file = activeLeaf.view.file;
-        if (this.pendingModeRestorations.has(file.path)) return;
-        const mode = activeLeaf.view.getMode();
-        const source = (activeLeaf.view.getState() as any)?.source ?? false;
-        if (!this.settings.markdownStates) this.settings.markdownStates = {};
-        this.settings.markdownStates[file.path] = { mode, source };
-        void this.saveSettings();
-      }
-    }));
-
-    this.registerEvent(this.app.workspace.on('active-leaf-change', leaf => {
-      this.syncActions();
+      this.observeMarkdownModes();
       this.updateFloatingBarHost();
-      if (leaf?.view instanceof MarkdownView && leaf.view.file) {
-        const file = leaf.view.file;
-        if (this.pendingModeRestorations.has(file.path)) return;
-        const mode = leaf.view.getMode();
-        const source = (leaf.view.getState() as any)?.source ?? false;
-        if (!this.settings.markdownStates) this.settings.markdownStates = {};
-        this.settings.markdownStates[file.path] = { mode, source };
-        void this.saveSettings();
-      }
+    }));
+    this.registerEvent(this.app.workspace.on('active-leaf-change', () => {
+      this.syncActions();
+      this.observeMarkdownModes();
+      this.updateFloatingBarHost();
     }));
     this.app.workspace.onLayoutReady(() => {
       this.syncActions();
+      this.observeMarkdownModes();
     });
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-    if (this.settings.viewName === '行动版' || this.settings.viewName === '应用版') {
-      this.settings.viewName = '速查版';
-      await this.saveSettings();
-    }
+    this.settings = loadPreferences(await this.loadData());
   }
 
   async saveSettings() {
-    await this.saveData(this.settings);
+    // Snapshot on request and serialize disk writes, including mode and name edits.
+    const snapshot = JSON.parse(JSON.stringify(this.settings)) as PluginSettings;
+    await this.saves.run(() => this.saveData(snapshot));
+  }
+
+  private queueFor(leaf: WorkspaceLeaf) {
+    let queue = this.navigation.get(leaf);
+    if (!queue) { queue = new SerialQueue(); this.navigation.set(leaf, queue); }
+    return queue;
+  }
+
+  private rememberMarkdown(leaf: WorkspaceLeaf) {
+    if (!(leaf.view instanceof MarkdownView) || !leaf.view.file) return;
+    const path = leaf.view.file.path;
+    const state = {mode: leaf.view.getMode(), source: leaf.view.getState().source === true};
+    this.observedMarkdown.set(leaf, {path, ...state});
+    const saved = this.settings.markdownStates[path];
+    if (saved?.mode === state.mode && saved.source === state.source) return;
+    this.settings.markdownStates[path] = state;
+    void this.saveSettings();
+  }
+
+  private observeMarkdownModes() {
+    for (const leaf of this.app.workspace.getLeavesOfType('markdown')) {
+      if (this.navigating.has(leaf) || !(leaf.view instanceof MarkdownView) || !leaf.view.file) continue;
+      const now = {path: leaf.view.file.path, mode: leaf.view.getMode(), source: leaf.view.getState().source === true};
+      const before = this.observedMarkdown.get(leaf);
+      this.observedMarkdown.set(leaf, now);
+      // Focus/layout restoration is not user intent. Only a mode change in the
+      // same file updates its detailed-mode preference.
+      if (before?.path === now.path && (before.mode !== now.mode || before.source !== now.source)) this.rememberMarkdown(leaf);
+    }
+  }
+
+  private installNavigation() {
+    const owner = this;
+    const original = WorkspaceLeaf.prototype.openFile;
+    const wrapped: typeof original = function(this: WorkspaceLeaf, file, options) {
+      if (owner.stopped || file.extension !== 'md') return original.call(this, file, options);
+      return owner.queueFor(this).run(async () => {
+        if (owner.stopped || !this.parent) return;
+        owner.rememberMarkdown(this);
+        owner.navigating.add(this);
+        try {
+          // An already-open leaf keeps its own mode, even when another split
+          // has changed this note's default for FUTURE opens.
+          const currentPath = this.view instanceof FileView ? this.view.file?.path : undefined;
+          const mode = currentPath === file.path
+            ? (this.view.getViewType() === VIEW ? 'app' : 'detail')
+            : owner.settings.noteStates[file.path] ?? 'detail';
+          const text = mode === 'app' ? await owner.sourceText(file) : '';
+          const parsed = parseRanges(text);
+          if (mode === 'app' && (parsed.ranges.length || parsed.errors.length)) {
+            await this.setViewState({type: VIEW, state: {file: file.path}, active: options?.active ?? this === owner.app.workspace.activeLeaf, group: options?.group}, options?.eState);
+          } else {
+            const saved = owner.settings.markdownStates[file.path];
+            await original.call(this, file, {...options, state: {...saved, ...options?.state}});
+          }
+        } finally {
+          owner.navigating.delete(this);
+          owner.observeMarkdownModes();
+          owner.syncActions();
+        }
+      });
+    };
+    WorkspaceLeaf.prototype.openFile = wrapped;
+    this.register(() => {
+      // Leave wrappers installed by other plugins intact; this one becomes inert.
+      if (WorkspaceLeaf.prototype.openFile === wrapped) WorkspaceLeaf.prototype.openFile = original;
+    });
   }
 
   private applicationViews(): ApplicationView[] {
@@ -740,28 +745,27 @@ export default class ApplicationPlugin extends Plugin {
   async openApplication(file: TFile, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf, targetOffset?: number) {
     const activeLeaf = fromLeaf ?? this.app.workspace.getActiveViewOfType(MarkdownView)?.leaf ?? this.app.workspace.getLeaf(false);
     const targetLeaf = evt ? this.resolveTargetLeaf(evt, activeLeaf) : activeLeaf;
-
-    let mdLeaf = activeLeaf?.view instanceof MarkdownView && activeLeaf.view.file?.path === file.path ? activeLeaf : undefined;
-    if (!mdLeaf) {
-      mdLeaf = this.app.workspace.getLeavesOfType('markdown').find(l => l.view instanceof MarkdownView && l.view.file?.path === file.path);
-    }
-    if (mdLeaf && mdLeaf.view instanceof MarkdownView) {
-      const mode = mdLeaf.view.getMode();
-      const source = (mdLeaf.view.getState() as any)?.source ?? false;
-      if (!this.settings.markdownStates) this.settings.markdownStates = {};
-      this.settings.markdownStates[file.path] = { mode, source };
-    }
-
-    this.settings.noteStates[file.path] = 'app';
-    await this.saveSettings();
-
-    await targetLeaf.setViewState({
-      type: VIEW,
-      state: { path: file.path, targetOffset },
-      active: true
+    this.rememberMarkdown(activeLeaf);
+    return this.queueFor(targetLeaf).run(async () => {
+      if (this.stopped || !targetLeaf.parent) return;
+      this.navigating.add(targetLeaf);
+      try {
+        const parsed = parseRanges(await this.sourceText(file));
+        if (!parsed.ranges.length && !parsed.errors.length) {
+          new Notice(`当前笔记没有${this.settings.viewName}内容，请先加入范围。`);
+          await targetLeaf.setViewState({type: 'markdown', state: {file: file.path, ...this.settings.markdownStates[file.path]}, active: true});
+          return;
+        }
+        this.settings.noteStates[file.path] = 'app';
+        await this.saveSettings();
+        if (this.stopped || !targetLeaf.parent) return;
+        await targetLeaf.setViewState({type: VIEW, state: {file: file.path, targetOffset}, active: true});
+      } finally {
+        this.navigating.delete(targetLeaf);
+        this.observeMarkdownModes();
+        this.syncActions();
+      }
     });
-    await this.app.workspace.revealLeaf(targetLeaf);
-    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
   }
 
   async jumpToSource(path: string, offset: number, fromLeaf?: WorkspaceLeaf) {
@@ -778,99 +782,96 @@ export default class ApplicationPlugin extends Plugin {
     }
   }
 
-  async removeRangeAt(path: string, rangeFrom: number, rangeTo: number) {
+  async editSource(file: TFile, expected: string | undefined, operation: (text: string) => string): Promise<boolean> {
+    const checked = (text: string) => {
+      if (expected !== undefined && text !== expected) throw new Error('正文已更新，本次操作未写入。请等待刷新后重试。');
+      return operation(text);
+    };
+    try {
+      const view = this.app.workspace.getLeavesOfType('markdown').map(l => l.view).find(v => v instanceof MarkdownView && v.file === file && v.getMode() === 'source');
+      if (view instanceof MarkdownView) {
+        const before = view.editor.getValue();
+        const after = checked(before);
+        let from = 0;
+        while (from < before.length && from < after.length && before[from] === after[from]) from++;
+        let end = before.length, newEnd = after.length;
+        while (end > from && newEnd > from && before[end-1] === after[newEnd-1]) {end--; newEnd--;}
+        if (before !== after) view.editor.replaceRange(after.slice(from,newEnd),view.editor.offsetToPos(from),view.editor.offsetToPos(end),'app-view.edit');
+      } else await this.app.vault.process(file, checked);
+      this.updateViews(file.path);
+      return true;
+    } catch (error) {
+      new Notice(error instanceof Error ? error.message : '无法修改源笔记。');
+      this.updateViews(file.path);
+      return false;
+    }
+  }
+
+  private addNamedCommand(command: Command) {
+    const label = command.name.replace(this.settings.viewName, '{name}');
+    this.namedCommands.push({command: this.addCommand(command), label});
+  }
+
+  refreshName() {
+    for (const {command, label} of this.namedCommands) command.name = `${this.manifest.name}: ${label.replace('{name}', this.settings.viewName)}`;
+    this.ribbonEl?.setAttribute('aria-label', `详细版／${this.settings.viewName}`);
+    for (const action of this.leafActions.values()) action.showEl.setAttribute('aria-label', `左键：查看${this.settings.viewName} | 右键：调整范围`);
+    for (const view of this.applicationViews()) view.updateName();
+    this.decorations.refresh();
+    if (this.editing) {
+      const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (view) this.mountFloatingBar(view);
+    }
+  }
+
+  async removeRangeAt(path: string, rangeFrom: number, rangeTo: number, expected?: string) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return;
-    await this.app.vault.process(file, text => {
+    const changed = await this.editSource(file, expected, text => {
       const edit = removeSpecificRangeEdit(text, rangeFrom, rangeTo);
       return text.slice(0, edit.from) + edit.text + text.slice(edit.to);
     });
-    new Notice(`已从${this.settings.viewName}移除该段。`);
+    if (changed) new Notice(`已从${this.settings.viewName}移除该段。`);
   }
 
   async clearAllRangesInFile(file: TFile) {
-    await this.app.vault.process(file, text => {
-      return text.replace(/%%app%%[\r\n]*/g, '').replace(/[\r\n]*%%\/app%%/g, '');
-    });
-    new Notice(`已清空所有${this.settings.viewName}标记。`);
+    if (await this.editSource(file, undefined, clearRangeMarkers)) new Notice(`已清空所有${this.settings.viewName}标记。`);
   }
 
   async openSource(path: string, evt?: MouseEvent, fromLeaf?: WorkspaceLeaf) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) { new Notice('源笔记不存在。'); return; }
-
     const activeLeaf = fromLeaf ?? this.app.workspace.getActiveViewOfType(ApplicationView)?.leaf ?? this.app.workspace.getLeaf(false);
     const targetLeaf = evt ? this.resolveTargetLeaf(evt, activeLeaf) : activeLeaf;
-
-    this.settings.noteStates[file.path] = 'detail';
-    await this.saveSettings();
-
-    let savedState = this.settings.markdownStates?.[file.path];
-    const hasReaderMode = Boolean((this.app as any).plugins?.plugins?.['reader-mode']);
-    if (!savedState && hasReaderMode) {
-      savedState = { mode: 'preview', source: false };
-    }
-    if (!savedState) {
-      savedState = { mode: 'preview', source: false };
-    }
-
-    this.pendingModeRestorations.set(file.path, savedState);
-
-    await targetLeaf.setViewState({
-      type: 'markdown',
-      state: {
-        file: file.path,
-        mode: savedState.mode,
-        source: savedState.source
-      },
-      active: true
+    return this.queueFor(targetLeaf).run(async () => {
+      if (this.stopped || !targetLeaf.parent) return;
+      this.navigating.add(targetLeaf);
+      try {
+        this.settings.noteStates[file.path] = 'detail';
+        await this.saveSettings();
+        if (this.stopped || !targetLeaf.parent) return;
+        const saved = this.settings.markdownStates[file.path] ?? {mode: 'preview', source: false};
+        await targetLeaf.setViewState({type: 'markdown', state: {file: file.path, ...saved}, active: true});
+      } finally {
+        this.navigating.delete(targetLeaf);
+        this.observeMarkdownModes();
+        this.syncActions();
+      }
     });
-    await this.app.workspace.revealLeaf(targetLeaf);
-    this.app.workspace.setActiveLeaf(targetLeaf, { focus: true });
-
-    await this.applyMarkdownModeWhenReady(targetLeaf, file.path, savedState);
   }
 
-  async applyMarkdownModeWhenReady(leaf: WorkspaceLeaf, filePath: string, targetState: MarkdownState): Promise<void> {
-    const targetMode = targetState.mode;
-    const targetSource = targetMode === 'source' ? (targetState.source ?? false) : false;
-
-    for (let attempt = 0; attempt < 12; attempt++) {
-      if (leaf.view instanceof MarkdownView && leaf.view.file?.path === filePath) {
-        const view = leaf.view;
-        const currentMode = view.getMode();
-        const currentSource = (view.getState() as any)?.source ?? false;
-
-        if (currentMode !== targetMode || (targetMode === 'source' && currentSource !== targetSource)) {
-          try {
-            const vs = leaf.getViewState();
-            if (vs?.state) {
-              vs.state.mode = targetMode;
-              vs.state.source = targetSource;
-              await leaf.setViewState(vs);
-            }
-          } catch (e) {
-            console.warn('leaf.setViewState error:', e);
-          }
-        } else {
-          if (!this.settings.markdownStates) this.settings.markdownStates = {};
-          this.settings.markdownStates[filePath] = { mode: targetMode, source: targetSource };
-          await this.saveSettings();
-          this.pendingModeRestorations.delete(filePath);
-          return;
-        }
-      }
-
-      await new Promise(resolve => window.setTimeout(resolve, 50));
-    }
-
-    this.pendingModeRestorations.delete(filePath);
+  async applyMarkdownModeWhenReady(leaf: WorkspaceLeaf, filePath: string, state: MarkdownState): Promise<void> {
+    await this.queueFor(leaf).run(async () => {
+      if (this.stopped || !(leaf.view instanceof MarkdownView) || leaf.view.file?.path !== filePath) return;
+      await leaf.setViewState({type: 'markdown', state: {file: filePath, ...state}});
+      this.rememberMarkdown(leaf);
+    });
   }
 
   private apply(editor: Editor, operation: () => TextEdit) {
     try {
       const edit = operation();
-      editor.replaceRange(edit.text, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to));
+      editor.replaceRange(edit.text, editor.offsetToPos(edit.from), editor.offsetToPos(edit.to),'app-view.range');
     } catch (error) { new Notice(error instanceof Error ? error.message : '无法修改范围。'); }
   }
 
@@ -903,9 +904,9 @@ export default class ApplicationPlugin extends Plugin {
   private clearAllRanges(view: MarkdownView) {
     const editor = view.editor;
     const content = editor.getValue();
-    const cleaned = content.replace(/%%app%%[\r\n]*/g, '').replace(/[\r\n]*%%\/app%%/g, '');
+    const cleaned = clearRangeMarkers(content);
     if (cleaned !== content) {
-      editor.setValue(cleaned);
+      editor.replaceRange(cleaned, {line: 0, ch: 0}, editor.offsetToPos(content.length),'app-view.clear');
       new Notice(`已清除当前笔记所有${this.settings.viewName}标记（按 Ctrl+Z 可撤销）。`);
       this.updateFloatingBar();
     } else {
@@ -933,6 +934,7 @@ export default class ApplicationPlugin extends Plugin {
           void this.openApplication(view.file, evt, leaf, cursorOffset);
         }
       });
+      showEl.addClass('app-view-toggle');
 
       const onContextMenu = (evt: MouseEvent) => {
         evt.preventDefault();
@@ -1019,6 +1021,7 @@ export default class ApplicationPlugin extends Plugin {
   }
 
   onunload() {
+    this.stopped = true;
     this.unmountFloatingBar();
     for (const action of this.leafActions.values()) {
       action.cleanup();
@@ -1035,7 +1038,6 @@ class ApplicationSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl('h2', { text: `${this.plugin.settings.viewName}设置` });
 
     new Setting(containerEl)
       .setName('视图名称')
@@ -1046,9 +1048,8 @@ class ApplicationSettingTab extends PluginSettingTab {
         .onChange(async value => {
           this.plugin.settings.viewName = value.trim() || '速查版';
           await this.plugin.saveSettings();
-          this.plugin.decorations.refresh();
+          this.plugin.refreshName();
         }));
   }
 }
-
 

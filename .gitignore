@@ -5,3 +5,4 @@ artifacts/
 /.obsidian/
 test-vault/.obsidian/
 test-vault/.trash/
+/test-vault/_qa*

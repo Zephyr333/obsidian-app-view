@@ -11,8 +11,8 @@ class MarkerBadge extends WidgetType {
     super();
     this.label = label;
   }
-  toDOM(): HTMLElement {
-    const badge = document.createElement('span');
+  toDOM(view: EditorView): HTMLElement {
+    const badge = view.dom.ownerDocument.createElement('span');
     badge.className = 'app-view-marker-badge';
     badge.textContent = this.label;
     return badge;
@@ -141,4 +141,3 @@ export function rangeExtension(
     }
   };
 }
-

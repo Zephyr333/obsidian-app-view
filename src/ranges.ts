@@ -1,6 +1,11 @@
 export const START = '%%app%%';
 export const END = '%%/app%%';
 
+export function clearRangeMarkers(text: string): string {
+  for (const marker of parseRanges(text).markers.reverse()) text = text.slice(0, marker.from) + text.slice(marker.end);
+  return text;
+}
+
 export interface Line { text: string; from: number; to: number; end: number; number: number }
 export interface Marker extends Line { kind: 'start' | 'end' }
 export interface AppRange { start: Marker; end: Marker; from: number; to: number; text: string }
@@ -153,6 +158,21 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
 
   const curLine = lines[curIdx];
   if (!curLine.text.trim()) return undefined;
+
+  // Find the enclosing fence from its opener, including clicks on its closing
+  // line and heading-looking code. A backwards nearest-fence scan is ambiguous.
+  let enclosingFence: {index: number; char: string; size: number} | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(lines[i].text);
+    if (!match) continue;
+    if (!enclosingFence) {
+      if (match[1][0] === '`' && match[2].includes('`')) continue;
+      enclosingFence = {index: i, char: match[1][0], size: match[1].length};
+    } else if (match[1][0] === enclosingFence.char && match[1].length >= enclosingFence.size && !match[2].trim()) {
+      if (curIdx >= enclosingFence.index && curIdx <= i) return {from: lines[enclosingFence.index].from, to: lines[i].end, label: '当前代码块', isEnclosed: false};
+      enclosingFence = undefined;
+    }
+  }
 
   // Ignore genuine marker lines or YAML frontmatter lines
   if (parsed.markers.some(m => m.number === curLine.number)) return undefined;
@@ -315,23 +335,45 @@ export function detectBlockAt(text: string, offset: number): DetectedBlock | und
   return { from, to, label, isEnclosed: false };
 }
 
-export function toggleCheckboxInSource(sourceText: string, rangeIndex: number, checkboxIndex: number): string | undefined {
-  const parsed = parseRanges(sourceText);
-  if (rangeIndex < 0 || rangeIndex >= parsed.ranges.length) return undefined;
-  const range = parsed.ranges[rangeIndex];
-  const regex = /^(\s*[-*+]\s+\[)([ xX])(\])/gm;
-  let count = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(range.text)) !== null) {
-    if (count === checkboxIndex) {
-      const currentVal = match[2];
-      const newVal = currentVal === ' ' ? 'x' : ' ';
-      const matchPosInText = range.from + match.index + match[1].length;
-      return sourceText.slice(0, matchPosInText) + newVal + sourceText.slice(matchPosInText + 1);
+export function taskOffsets(text: string): number[] {
+  const offsets: number[] = [];
+  let fence: {char: string; size: number} | undefined;
+  let comment = false;
+  let htmlComment = false;
+  let listIndent: number | undefined;
+  for (const line of linesOf(text)) {
+    const raw = line.text.replace(/^(?:[ \t]*>[ \t]?)+/, '');
+    const m = /^\s*(`{3,}|~{3,})(.*)$/.exec(raw);
+    if (fence) {
+      if (m && m[1][0] === fence.char && m[1].length >= fence.size && !m[2].trim()) fence = undefined;
+      continue;
     }
-    count++;
+    if (m && !comment && !htmlComment) { fence = {char: m[1][0], size: m[1].length}; continue; }
+    const hidden = comment || htmlComment;
+    for (const token of raw.replace(/`[^`]*`/g, '').match(/<!--|-->|%%/g) ?? []) {
+      if (token === '<!--' && !comment) htmlComment = true;
+      else if (token === '-->' && !comment) htmlComment = false;
+      else if (token === '%%' && !htmlComment) comment = !comment;
+    }
+    if (hidden || comment || htmlComment) continue;
+    const list = /^([ \t]*)(?:[-*+]|\d+[.)])[ \t]+/.exec(raw);
+    if (list) {
+      const indent = list[1].replace(/\t/g, '    ').length;
+      if (indent >= 4 && listIndent === undefined) continue;
+      listIndent = indent;
+      const task = /^([ \t]*(?:[-*+]|\d+[.)])[ \t]+\[)([ xX])\](?:[ \t]|$)/.exec(raw);
+      if (task) offsets.push(line.from + line.text.length - raw.length + task[1].length);
+    } else if (raw.trim() && !/^[ \t]+/.test(raw)) listIndent = undefined;
   }
-  return undefined;
+  return offsets;
 }
 
+export function toggleCheckboxInSource(sourceText: string, rangeIndex: number, checkboxIndex: number): string | undefined {
+  const parsed = parseRanges(sourceText);
+  if (parsed.errors.length || rangeIndex < 0 || rangeIndex >= parsed.ranges.length) return undefined;
+  const range = parsed.ranges[rangeIndex];
+  const offset = taskOffsets(range.text)[checkboxIndex];
+  if (offset === undefined) return undefined;
+  const pos = range.from + offset;
+  return sourceText.slice(0,pos) + (sourceText[pos] === ' ' ? 'x' : ' ') + sourceText.slice(pos+1);
+}
