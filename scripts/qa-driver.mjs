@@ -6,17 +6,24 @@ export async function driver() {
   const wait = async (expression, label = expression, timeout = 8000) => {
     const deadline = Date.now() + timeout;
     do {
-      if (await evaluate(expression)) return;
+      try {
+        if (await evaluate(expression)) return;
+      } catch (err) {
+        if (!String(err?.message ?? JSON.stringify(err)).includes('Execution context was destroyed')) throw err;
+      }
       await new Promise(r => setTimeout(r, 50));
     } while (Date.now() < deadline);
-    throw new Error(`Timed out: ${label}; state=${JSON.stringify(await evaluate('app.workspace.activeLeaf?.getViewState()'))}`);
+    throw new Error(`Timed out: ${label}; state=${JSON.stringify(await evaluate('app.workspace.activeLeaf?.getViewState()').catch(() => null))}`);
   };
-  await wait("typeof app !== 'undefined' && !!app.workspace?.layoutReady && !!app.plugins?.plugins?.['app-view']", "plugin and workspace ready", 15000);
+  await wait("typeof app !== 'undefined' && !!app.workspace?.layoutReady", "workspace ready", 15000);
+  await evaluate("if (!app.plugins?.plugins?.['app-view']) app.plugins?.enablePluginAndSave?.('app-view')");
+  await wait("!!app.plugins?.plugins?.['app-view']", "plugin ready", 15000);
+  if (await evaluate("Boolean(app.isMobile)")) {
+    await cdp.send('Emulation.clearDeviceMetricsOverride');
+    await evaluate("setTimeout(() => app.emulateMobile(false), 0)");
+    await wait("typeof app !== 'undefined' && !app.isMobile && !!app.workspace?.layoutReady && !!app.plugins?.plugins?.['app-view']", "exit mobile mode and plugin ready");
+  }
   await evaluate(`(async () => {
-    if (app.isMobile) {
-      app.emulateMobile(false);
-      await new Promise(r => setTimeout(r, 400));
-    }
     if (!app.workspace.rootSplit.children.some(c => c.type === 'tabs')) {
       app.workspace.createLeafInParent(app.workspace.rootSplit, 0);
     }

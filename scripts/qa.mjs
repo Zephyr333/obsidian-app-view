@@ -10,11 +10,11 @@ const suites = [
   { name: 'restart', script: 'scripts/qa-restart.mjs', artifact: 'artifacts/qa-restart-results.json' }
 ];
 
-console.log('=== Starting Full QA Verification Suite (v1.0.0) ===\n');
+console.log('=== Starting Full QA Verification Suite (v1.0.1) ===\n');
 
 const allResults = [];
 const summary = {
-  version: '1.0.0',
+  version: '1.0.1',
   obsidian: '1.13.7',
   timestamp: new Date().toISOString(),
   actualPhoneTested: false,

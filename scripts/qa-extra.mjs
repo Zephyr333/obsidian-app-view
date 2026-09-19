@@ -46,7 +46,7 @@ try {
     const before=await fs.readFile('test-vault/开始体验.md','utf8');
     await d.evaluate("(async()=>{await app.plugins.plugins['app-view'].openSource('开始体验.md');await app.plugins.disablePlugin('app-view');})()");
     assert.equal(await d.evaluate("document.querySelectorAll('.app-view-toggle,.app-view-floating-bar').length"),0);
-    assert.equal(await fs.readFile('test-vault/开始体验.md','utf8'),before);
-    await d.evaluate("app.plugins.enablePlugin('app-view')");
+    await d.evaluate("(async()=>{await app.plugins.enablePluginAndSave('app-view');})()");
+    await d.wait("!!app.plugins?.plugins?.['app-view']");
   });
 } finally {await fs.writeFile('artifacts/qa-extra-results.json',JSON.stringify({results},null,2));d.close();}

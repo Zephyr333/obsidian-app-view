@@ -22,6 +22,7 @@ import {
   addRangeEdit,
   detectBlockAt,
   parseRanges,
+  preserveBlankLines,
   removeRangeEdit,
   removeSpecificRangeEdit,
   toggleCheckboxInSource,
@@ -380,7 +381,8 @@ class ApplicationView extends FileView {
           });
 
           const content = section.createDiv({cls: 'app-view-rendered'});
-          await MarkdownRenderer.render(this.app, range.text, content, file.path, component);
+          const renderedMarkdown = preserveBlankLines(range.text);
+          await MarkdownRenderer.render(this.app, renderedMarkdown, content, file.path, component);
           const tasks = Array.from(content.querySelectorAll<HTMLInputElement>('input.task-list-item-checkbox')).filter(e => !e.closest('.internal-embed'));
           if (tasks.length !== taskOffsets(range.text).length) {
             for (const task of tasks) { task.disabled = true; task.title = '此结构无法安全对应源任务，请在详细版修改。'; }

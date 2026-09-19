@@ -8,6 +8,7 @@ import {
   detectBlockAt,
   toggleCheckboxInSource,
   clearRangeMarkers,
+  preserveBlankLines,
   type TextEdit
 } from '../src/ranges';
 const apply = (text: string, edit: TextEdit) => text.slice(0, edit.from) + edit.text + text.slice(edit.to);
@@ -151,3 +152,30 @@ test('detectBlockAt includes full code fences even if they contain marker-like t
   assert.equal(parsed.errors.length, 0);
   assert.equal(parsed.ranges.length, 1);
 });
+
+test('preserveBlankLines preserves single, multiple, code blocks, lists and trims outer whitespace', () => {
+  // 1. Single and multiple blank lines between headings and paragraphs
+  const doc = '## 二级标题\n\n### 三级标题\n正文1\n\n\n正文2';
+  const preserved = preserveBlankLines(doc);
+  assert.equal(preserved, '## 二级标题\n<br class="app-view-blank">\n\n### 三级标题\n正文1\n<br class="app-view-blank">\n\n<br class="app-view-blank">\n\n正文2');
+
+  // 2. Blank lines inside code fence are untouched
+  const withCode = '```ts\nconst a = 1;\n\nconst b = 2;\n```';
+  assert.equal(preserveBlankLines(withCode), withCode);
+
+  // 3. Blank lines inside list items are indented to preserve list structure
+  const list = '- item 1\n\n- item 2';
+  assert.equal(preserveBlankLines(list), '- item 1\n  <br class="app-view-blank">\n\n- item 2');
+
+  const nestedList = '  - sub 1\n\n  - sub 2';
+  assert.equal(preserveBlankLines(nestedList), '  - sub 1\n    <br class="app-view-blank">\n\n  - sub 2');
+
+  // 4. CRLF handling and outer blank line trimming
+  const crlf = '\r\n\r\n## 标题\r\n\r\n段落\r\n\r\n';
+  assert.equal(preserveBlankLines(crlf), '## 标题\n<br class="app-view-blank">\n\n段落');
+
+  // 5. Empty or whitespace-only strings return empty
+  assert.equal(preserveBlankLines(''), '');
+  assert.equal(preserveBlankLines('   \n  \n\t '), '');
+});
+

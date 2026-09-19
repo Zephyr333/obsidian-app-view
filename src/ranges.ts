@@ -377,3 +377,89 @@ export function toggleCheckboxInSource(sourceText: string, rangeIndex: number, c
   const pos = range.from + offset;
   return sourceText.slice(0,pos) + (sourceText[pos] === ' ' ? 'x' : ' ') + sourceText.slice(pos+1);
 }
+
+export function preserveBlankLines(text: string): string {
+  if (!text.trim()) return '';
+  const lines = text.split(/\r?\n/);
+
+  let firstNonBlank = 0;
+  while (firstNonBlank < lines.length && !lines[firstNonBlank].trim()) {
+    firstNonBlank++;
+  }
+  let lastNonBlank = lines.length - 1;
+  while (lastNonBlank >= 0 && !lines[lastNonBlank].trim()) {
+    lastNonBlank--;
+  }
+  if (firstNonBlank > lastNonBlank) return '';
+
+  const result: string[] = [];
+  let fence: { char: string; size: number } | undefined;
+  let yaml = false;
+
+  for (let i = firstNonBlank; i <= lastNonBlank; i++) {
+    const raw = lines[i];
+
+    if (i === 0 && raw.replace(/^\uFEFF/, '') === '---') {
+      yaml = true;
+      result.push(raw);
+      continue;
+    }
+    if (yaml) {
+      result.push(raw);
+      if (/^(---|\.\.\.)\s*$/.test(raw)) yaml = false;
+      continue;
+    }
+
+    if (fence) {
+      result.push(raw);
+      const close = /^ {0,3}(`+|~+)\s*$/.exec(raw);
+      if (close && close[1][0] === fence.char && close[1].length >= fence.size) {
+        fence = undefined;
+      }
+      continue;
+    }
+
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(raw);
+    if (fenceMatch && !(fenceMatch[1][0] === '`' && fenceMatch[2].includes('`'))) {
+      fence = { char: fenceMatch[1][0], size: fenceMatch[1].length };
+      result.push(raw);
+      continue;
+    }
+
+    if (/^[ \t]*$/.test(raw)) {
+      let prevNonBlank = '';
+      for (let j = result.length - 1; j >= 0; j--) {
+        const item = result[j];
+        if (item.trim() && !item.includes('app-view-blank')) {
+          prevNonBlank = item;
+          break;
+        }
+      }
+
+      let nextNonBlank = '';
+      for (let j = i + 1; j <= lastNonBlank; j++) {
+        const item = lines[j];
+        if (item.trim()) {
+          nextNonBlank = item;
+          break;
+        }
+      }
+
+      const prevList = /^(\s*)([-*+]|\d+[.)])\s+/.exec(prevNonBlank);
+      const nextList = /^(\s*)([-*+]|\d+[.)])\s+/.exec(nextNonBlank);
+
+      if (prevList && nextList) {
+        const indent = prevList[1] + '  ';
+        result.push(`${indent}<br class="app-view-blank">\n`);
+      } else {
+        result.push('<br class="app-view-blank">\n');
+      }
+      continue;
+    }
+
+    result.push(raw);
+  }
+
+  return result.join('\n');
+}
+
