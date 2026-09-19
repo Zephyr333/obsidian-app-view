@@ -12,14 +12,14 @@
   color: var(--inline-title-color, var(--text-normal));
   max-width: var(--file-line-width);
   margin-inline: auto;
-  padding: var(--size-4-6) var(--size-4-6) var(--size-4-2);
+  padding: var(--size-4-6) var(--size-4-6) 0;
   user-select: none;
 }
 
 .app-view-body {
   max-width: var(--file-line-width);
   margin-inline: auto;
-  padding: var(--size-4-2) var(--size-4-6) var(--size-4-12);
+  padding: 0 var(--size-4-6) var(--size-4-12);
   overflow-wrap: anywhere;
 }
 
@@ -37,11 +37,11 @@
 }
 
 .app-view-section + .app-view-section {
-  margin-top: var(--size-4-6);
+  margin-top: var(--size-4-5, 20px);
 }
 
-.app-view-section > :first-child {
-  margin-top: 0;
+.app-view-section:first-child > .app-view-rendered > :first-child {
+  margin-top: var(--size-4-4, 16px);
 }
 
 .app-view-section table {
@@ -235,10 +235,6 @@
   background: var(--background-modifier-hover);
 }
 
-.is-mobile .app-view-body {
-  padding-inline: var(--size-4-4);
-}
-
 .app-view-section:focus-within .app-view-locate-btn {
   opacity: 1;
 }
@@ -268,6 +264,10 @@
 .is-mobile .app-view-floating-bar {
   width: calc(100% - 32px);
   bottom: calc(80px + env(safe-area-inset-bottom, 0px));
+}
+
+.is-mobile .app-view-body {
+  padding-inline: var(--size-4-4);
 }
 
 .is-mobile .app-view-container.is-managing .app-view-body {

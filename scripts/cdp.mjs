@@ -47,7 +47,10 @@ export async function connect() {
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
     return result.result.value;
   };
-  if (await evaluate('app.vault.adapter.getBasePath()') !== 'F:\\Temp\\app-view\\test-vault') { socket.close(); throw new Error('Wrong vault'); }
+  const path = await import('node:path');
+  const expectedVault = path.resolve('test-vault');
+  const actualVault = path.resolve(await evaluate('app.vault.adapter.getBasePath()'));
+  if (actualVault.toLowerCase() !== expectedVault.toLowerCase()) { socket.close(); throw new Error(`Wrong vault: expected ${expectedVault}, got ${actualVault}`); }
   return { send, evaluate, close: () => socket.close() };
 }
 if (process.argv[1]?.endsWith('cdp.mjs')) {

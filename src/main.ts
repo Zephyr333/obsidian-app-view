@@ -52,6 +52,9 @@ class ApplicationView extends FileView {
     super(leaf);
     this.navigation = true;
     this.allowNoFile = false;
+    this.copyActionEl = this.addAction('copy', `复制${this.owner.settings.viewName}纯文本`, async () => {
+      await this.copyContent();
+    });
     const backActionEl = this.backActionEl = this.addAction('file-text', `左键：返回详细版 | 右键：管理${this.owner.settings.viewName}`, (evt: MouseEvent) => {
       void this.owner.openSource(this.path, evt, this.leaf);
     });
@@ -59,9 +62,6 @@ class ApplicationView extends FileView {
       evt.preventDefault();
       evt.stopPropagation();
       this.toggleManaging();
-    });
-    this.copyActionEl = this.addAction('copy', `复制${this.owner.settings.viewName}纯文本`, async () => {
-      await this.copyContent();
     });
   }
 
@@ -104,6 +104,7 @@ class ApplicationView extends FileView {
     this.contentEl.addClass('app-view-container');
     this.contentEl.addClass('markdown-rendered');
     this.contentEl.addClass('markdown-preview-view');
+    this.contentEl.addClass('is-readable-line-width');
 
     this.heading = this.contentEl.createEl('div', { cls: 'inline-title' });
     this.body = this.contentEl.createDiv({ cls: 'app-view-body' });
