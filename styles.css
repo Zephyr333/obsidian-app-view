@@ -293,22 +293,17 @@
   line-height: var(--line-height-normal, 1.5);
 }
 
+.app-view-container .markdown-rendered :is(p, pre, table, ul, ol) + :is(h1, h2, h3, h4, h5, h6),
+.app-view-container .markdown-rendered div:is(.el-blockquote, .el-p, .el-pre, .el-table, .el-ul, .el-ol) + div > :is(h1, h2, h3, h4, h5, h6),
 .app-view-rendered h1,
 .app-view-rendered h2,
 .app-view-rendered h3,
 .app-view-rendered h4,
 .app-view-rendered h5,
 .app-view-rendered h6 {
-  margin-block: 0;
-  padding-top: var(--p-spacing, 16px);
-  padding-bottom: 0;
-}
-
-/* Match Live Preview: when a heading follows another heading with a blank line in between, paddingTop is 0 */
-.app-view-rendered :is(h1, h2, h3, h4, h5, h6) + .app-view-blank + :is(h1, h2, h3, h4, h5, h6),
-.app-view-rendered :is(h1, h2, h3, h4, h5, h6) + .el-p:has(> .app-view-blank:only-child) + :is(h1, h2, h3, h4, h5, h6),
-.app-view-rendered :is(h1, h2, h3, h4, h5, h6) + .el-br:has(.app-view-blank) + :is(h1, h2, h3, h4, h5, h6) {
-  padding-top: 0;
+  margin-top: 0 !important;
+  margin-block: 0 !important;
+  padding-block: 0 !important;
 }
 
 .app-view-rendered ul,
