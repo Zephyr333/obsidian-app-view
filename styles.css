@@ -40,6 +40,14 @@
   margin-top: var(--size-4-5, 20px);
 }
 
+.app-view-container.has-block-gap .app-view-section + .app-view-section {
+  margin-top: calc(var(--p-spacing, 1rem) + var(--line-height-normal, 1.5) * 1rem);
+}
+
+.app-view-container.is-managing.has-block-gap .app-view-section + .app-view-section {
+  margin-top: var(--size-4-4);
+}
+
 .app-view-section:first-child > .app-view-rendered > :first-child {
   margin-top: var(--size-4-4, 16px);
 }

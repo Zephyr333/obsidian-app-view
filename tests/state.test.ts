@@ -8,7 +8,8 @@ test('per-note choices and detailed modes survive a JSON persistence roundtrip',
   state.noteStates['B.md']='detail';
   state.markdownStates['B.md']={mode:'source',source:true};
   assert.deepEqual(loadPreferences(JSON.parse(JSON.stringify(state))),state);
-  assert.equal(loadPreferences(null).noteStates['A.md'],undefined);
+  assert.equal(loadPreferences(null).blankLineBetweenBlocks, true);
+  assert.equal(loadPreferences({blankLineBetweenBlocks: false}).blankLineBetweenBlocks, false);
 });
 test('old data is migrated and corrupt fields do not break navigation', () => {
   assert.deepEqual(loadPreferences({viewName:'应用版',noteStates:null,markdownStates:[]}),loadPreferences(null));

@@ -105,6 +105,7 @@ class ApplicationView extends FileView {
     this.contentEl.addClass('markdown-rendered');
     this.contentEl.addClass('markdown-preview-view');
     this.contentEl.addClass('is-readable-line-width');
+    this.contentEl.toggleClass('has-block-gap', this.owner.settings.blankLineBetweenBlocks);
 
     this.heading = this.contentEl.createEl('div', { cls: 'inline-title' });
     this.body = this.contentEl.createDiv({ cls: 'app-view-body' });
@@ -299,6 +300,7 @@ class ApplicationView extends FileView {
 
   async refresh() {
     if (!this.body) return;
+    this.contentEl.toggleClass('has-block-gap', this.owner.settings.blankLineBetweenBlocks);
     const generation = ++this.generation;
     const file = this.app.vault.getAbstractFileByPath(this.path);
     this.heading.setText(file instanceof TFile ? file.basename : '');
@@ -825,6 +827,12 @@ export default class ApplicationPlugin extends Plugin {
     }
   }
 
+  refreshBlockGap() {
+    for (const view of this.applicationViews()) {
+      view.contentEl.toggleClass('has-block-gap', this.settings.blankLineBetweenBlocks);
+    }
+  }
+
   async removeRangeAt(path: string, rangeFrom: number, rangeTo: number, expected?: string) {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) return;
@@ -1050,6 +1058,17 @@ class ApplicationSettingTab extends PluginSettingTab {
           this.plugin.settings.viewName = value.trim() || '速查版';
           await this.plugin.saveSettings();
           this.plugin.refreshName();
+        }));
+
+    new Setting(containerEl)
+      .setName('块间空行')
+      .setDesc('在速查版的内容块之间默认保留一个空行间距')
+      .addToggle(toggle => toggle
+        .setValue(this.plugin.settings.blankLineBetweenBlocks)
+        .onChange(async value => {
+          this.plugin.settings.blankLineBetweenBlocks = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshBlockGap();
         }));
   }
 }

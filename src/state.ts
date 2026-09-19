@@ -1,17 +1,21 @@
 export interface MarkdownState { mode: 'source' | 'preview'; source?: boolean }
 export interface PluginSettings {
   viewName: string;
+  blankLineBetweenBlocks: boolean;
   noteStates: Record<string, 'detail' | 'app'>;
   markdownStates: Record<string, MarkdownState>;
 }
 
 /** Do not share mutable defaults across reloads; ignore malformed persisted entries. */
 export function loadPreferences(raw: unknown): PluginSettings {
-  const settings: PluginSettings = {viewName: '速查版', noteStates: {}, markdownStates: {}};
+  const settings: PluginSettings = {viewName: '速查版', blankLineBetweenBlocks: true, noteStates: {}, markdownStates: {}};
   if (!raw || typeof raw !== 'object') return settings;
   const data = raw as Record<string, unknown>;
   if (typeof data.viewName === 'string' && data.viewName.trim()) {
     settings.viewName = ['行动版', '应用版'].includes(data.viewName) ? '速查版' : data.viewName.trim();
+  }
+  if (typeof data.blankLineBetweenBlocks === 'boolean') {
+    settings.blankLineBetweenBlocks = data.blankLineBetweenBlocks;
   }
   if (data.noteStates && typeof data.noteStates === 'object') {
     for (const [path, value] of Object.entries(data.noteStates)) {
