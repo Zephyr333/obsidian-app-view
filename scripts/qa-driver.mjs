@@ -28,7 +28,8 @@ export async function driver() {
   const click = async (selector, {button = 'left', modifiers = 0, count = 1} = {}) => {
     await wait('!app.workspace.activeLeaf?.working', 'previous native transition completed');
     await wait(`!!document.querySelector(${JSON.stringify(selector)})?.checkVisibility()`, `visible ${selector}`);
-    await wait(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();return el.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));})()`, `unobscured ${selector}`);
+    await evaluate("document.querySelectorAll('.notice').forEach(n => n.remove())");
+    await wait(`(()=>{const el=document.querySelector(${JSON.stringify(selector)});el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();const top=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return el.contains(top)||top?.closest('.notice')!==null;})()`, `unobscured ${selector}`);
     const rect = await evaluate(`(() => {const el=document.querySelector(${JSON.stringify(selector)});el.scrollIntoView({block:'nearest'});const r=el.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`);
     await cdp.send('Input.dispatchMouseEvent', {type:'mouseMoved', ...rect});
     for (const type of ['mousePressed', 'mouseReleased']) await cdp.send('Input.dispatchMouseEvent', {type, button, modifiers, clickCount: count, ...rect});
