@@ -12,6 +12,7 @@
   color: var(--inline-title-color, var(--text-normal));
   max-width: var(--file-line-width);
   margin-inline: auto;
+  margin-bottom: var(--size-4-3, 12px);
   padding: var(--size-4-6) var(--size-4-6) 0;
   user-select: none;
 }
@@ -37,11 +38,11 @@
 }
 
 .app-view-section + .app-view-section {
-  margin-top: var(--size-4-5, 20px);
+  margin-top: 0;
 }
 
 .app-view-container.has-block-gap .app-view-section + .app-view-section {
-  margin-top: calc(var(--p-spacing, 1rem) + var(--line-height-normal, 1.5) * 1rem);
+  margin-top: calc(var(--font-text-size, 16px) * var(--line-height-normal, 1.5));
 }
 
 .app-view-container.is-managing.has-block-gap .app-view-section + .app-view-section {
@@ -49,7 +50,7 @@
 }
 
 .app-view-section:first-child > .app-view-rendered > :first-child {
-  margin-top: var(--size-4-4, 16px);
+  margin-top: 0;
 }
 
 .app-view-section table {
@@ -299,8 +300,15 @@
 .app-view-rendered h5,
 .app-view-rendered h6 {
   margin-block: 0;
-  padding-top: calc(var(--heading-spacing, 1rem) * 0.35);
-  padding-bottom: 0.1em;
+  padding-top: var(--p-spacing, 16px);
+  padding-bottom: 0;
+}
+
+/* Match Live Preview: when a heading follows another heading with a blank line in between, paddingTop is 0 */
+.app-view-rendered :is(h1, h2, h3, h4, h5, h6) + .app-view-blank + :is(h1, h2, h3, h4, h5, h6),
+.app-view-rendered :is(h1, h2, h3, h4, h5, h6) + .el-p:has(> .app-view-blank:only-child) + :is(h1, h2, h3, h4, h5, h6),
+.app-view-rendered :is(h1, h2, h3, h4, h5, h6) + .el-br:has(.app-view-blank) + :is(h1, h2, h3, h4, h5, h6) {
+  padding-top: 0;
 }
 
 .app-view-rendered ul,
