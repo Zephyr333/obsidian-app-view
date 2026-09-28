@@ -1,4 +1,4 @@
-# 速查版 (Quick View)
+# Quick View (速查版)
 
 [English](#english) | [中文说明](#中文说明)
 
@@ -6,16 +6,85 @@
 
 <span id="english"></span>
 
-## English Overview
+## Overview
 
 **Quick View** extracts and projects marked sections from your notes into a clean, read-only view in the exact order of the original note. Your full note remains the single source of truth, while editing stays native to Live Preview.
 
-- **Native Dual-State Toggle**: Click the header action icon (`zap` / `file-text`) to switch in-place between Detailed view and Quick View. `Ctrl/Cmd + Click` opens in a new tab; `Ctrl + Alt + Click` opens in a split pane for side-by-side comparison.
+- **Native In-place Toggle**: Click the header action icon (`zap` / `file-text`) to switch in-place between Detailed view and Quick View. `Ctrl/Cmd + Click` opens in a new tab; `Ctrl + Alt + Click` opens in a split pane for side-by-side comparison.
 - **State Memory**: Remembers the last viewed state for each note independently across restarts and file navigation.
 - **Smart Range Selection**: Select text or right-click headings, list items, callouts, or tables to include entire blocks with zero manual fence typing.
 - **Interactive Checklists**: Toggle tasks (`- [ ]` / `- [x]`) directly within the read-only projection; changes write atomically back to the source Markdown.
 - **Bi-directional Navigation**: Smoothly jump from any projected section back to its exact line in the editor with high-precision highlighting.
 - **Pure Local & Zero Lock-in**: Ranges are stored cleanly as comments (`%%app%% ... %%/app%%`) inside your note, requiring no external databases, servers, or lock-in.
+
+---
+
+## Installation
+
+### From Community Plugins (Recommended once listed)
+1. In Obsidian, open **Settings** → **Community plugins**.
+2. Turn off **Restricted mode** if enabled.
+3. Click **Browse** and search for `Quick View`.
+4. Click **Install**, and then **Enable**.
+
+### Manual Installation
+1. Download `main.js`, `manifest.json`, and `styles.css` from the [Latest Release](https://github.com/Zephyr333/obsidian-app-view/releases/latest).
+2. Open your vault's plugins folder: `<vault>/.obsidian/plugins/`.
+3. Create a folder named `app-view` and copy the three files into it.
+4. Reload Obsidian, go to **Settings** → **Community plugins**, and enable **Quick View**.
+
+---
+
+## Usage
+
+### 1. Toggle Views
+- **Header Icon**: Click the `zap` (or `file-text`) icon in the leaf header to switch between Detailed view and Quick View.
+  - **Left Click**: In-place switch in the current tab without creating extra tabs.
+  - **Middle Click or `Ctrl/Cmd + Left Click`**: Open Quick View in a new tab.
+  - **`Ctrl + Alt + Left Click`**: Open Quick View in a split pane side-by-side.
+
+### 2. Mark & Adjust Ranges
+- **Right-click Header Icon**: Right-click the header icon at any time to enter or exit range adjustment mode.
+- **Right-click in Editor**:
+  - **With Selection**: Select text and right-click to choose "Add to Quick View" (or "Remove from Quick View").
+  - **Without Selection**: Right-click inside any heading, list item, blockquote, callout, table, or code block to intelligently include that entire block structure.
+
+### 3. Manage Ranges Directly
+- Right-click the header icon while viewing Quick View to enter inline management mode.
+- Each section displays a `[Remove this section]` action button, and a floating management bar appears at the bottom.
+
+### 4. Interactive Tasks
+- Toggle `- [ ]` and `- [x]` checkboxes directly within Quick View. Changes are atomically synchronized back to the source Markdown note.
+
+### 5. Jump to Source
+- Hover over any section in Quick View and click the `arrow-up-right` icon (or double-click the section) to switch back to Live Preview and smoothly highlight that exact line in the editor.
+
+---
+
+## Storage & Syntax
+
+Marked sections are stored directly in your Markdown note as top-level comments:
+
+```markdown
+Detailed notes that only appear in Detailed view.
+
+%%app%%
+## Action Items
+- [ ] Review documentation
+- [x] Submit release
+%%/app%%
+
+Additional comprehensive explanations.
+```
+
+When the plugin is disabled, your notes remain clean standard Markdown.
+
+---
+
+## Settings
+
+- **Display Name**: Customize the name shown in the UI, headers, and commands (default: "Quick View" / "速查版").
+- **Block Spacing**: Option to preserve or collapse blank line gaps between consecutive blocks.
 
 ---
 
@@ -29,14 +98,12 @@
 
 当前版本：1.0.8。最低 Obsidian 版本设为 **1.13.7**。
 
-1. 解压 `app-view-1.0.8.zip`，得到 `app-view` 文件夹，里面有 `main.js`、`manifest.json`、`styles.css`。
-2. 将文件夹放入目标库的插件目录。默认是 `<你的库>/.obsidian/plugins/app-view/`；自定义过库配置目录时，使用实际配置目录下的 `plugins`。
-3. 在 Obsidian 设置 → 第三方插件中启用“速查版”。必要时重新加载 Obsidian。
+1. 在 Releases 中下载 `main.js`、`manifest.json`、`styles.css`。
+2. 将文件放入目标库的插件目录：`<你的库>/.obsidian/plugins/app-view/`。
+3. 在 Obsidian 设置 → 第三方插件中启用“Quick View / 速查版”。必要时重新加载 Obsidian。
 4. 电脑和手机分别安装并启用。正文通过你已有的方式同步；插件不提供额外同步服务。
 
-不需要 Node.js，不需要其他第三方插件，也不需要维护另一份文件。
-
-## 使用
+### 使用指南
 
 - **双态切换（对齐原生）**：
   - 点击笔记右上角顶栏图标（`zap` 闪电 / `file-text` 文档）在详细版与速查版之间切换。
@@ -64,9 +131,7 @@
 - **同步**：编辑、撤销或收到文件更新后，已打开的速查视图自动刷新。手机显示已经同步到本机的内容。
 - **自定义名称**：可在设置中将默认的“速查版”自定义为“精要版”、“实践版”等称谓。
 
-
-
-## 范围存储
+### 范围存储
 
 范围保存在源 Markdown 中，不额外记录字符偏移或块 ID。标记各自独占一行，位于行首：
 
@@ -85,7 +150,7 @@
 
 多个范围按原文顺序显示；不自动补标题、改变标题级别或改写正文。不同范围分开渲染，防止无关列表或表格被意外合并。
 
-## 版本能力与边界
+### 版本能力与边界
 
 - 支持标题、段落、多行内容、完整列表、引用／Callout、表格、代码、公式、图片和内部链接。
 - 智能结构识别覆盖标题及其全部子内容、列表项及嵌套子项、Callout、代码块、表格与普通段落；手动划定范围时建议选取完整行。
@@ -94,34 +159,3 @@
 - 脚注和引用式链接的定义需要放在同一个应用范围内；不会自动收集范围外的定义。普通 `[[笔记]]`、行内链接和图片按源笔记路径解析。
 - 速查版正文为只读投影，除任务列表复选框可原子回写源文件外，不提供富文本编辑功能。
 - 停用插件后，源笔记仍是普通 Markdown；原生阅读视图将边界作为注释隐藏。
-
-## 验证
-
-Windows 的 Obsidian 1.13.7 隔离测试库：
-
-- 22 项纯函数与状态管理单元测试（边界识别、代码块隔离、任务索引、CRLF 保持、状态持久化与迁移序列化）。
-- 42 项真实应用自动化集成检查（覆盖 6 大子套件）：
-  - 导航状态回归（A→B→A 状态隔离、阅读/实时预览/源码模式恢复、多分栏防串扰、并发点击、历史后退前进、插件重载）；
-  - 核心功能特性（Live Preview 真实标记折叠、选区增删、撤销重做、复选框原子回写、代码块隔离、失效投影防误删、清空标记保护）；
-  - 扩展与边缘交互（中键/Ctrl+左键新标签、自定义名称实时响应、纯文本复制去控件、内部链接与悬浮预览、外部文件变更刷新、笔记重命名迁移、停用干净卸载）；
-  - 移动端 390 × 844 模拟布局（无横向溢出，所有操作按钮 ≥ 44 CSS 像素，底部悬浮胶囊防遮挡）；
-  - 升级与全新安装（从 0.2.0 基线升级配置完整无损、无历史配置全新安装默认偏好初始化与即时可用）；
-  - 进程冷重启恢复（真正退出 Obsidian 进程后重启，多标签/多分栏速查与详细双态各自精准恢复，磁盘配置防覆盖）。
-
-**尚未在实际 Android／iOS 手机上验证。** 模拟不能证明真实设备、输入法及同步软件的行为。
-
-`test-vault/` 有可体验的样例，项目内的隔离测试库已安装插件。没有安装到现有个人库，也没有修改其配置。
-
-## 开发
-
-```powershell
-npm ci --cache D:\npm-cache
-npm test
-npm run build
-```
-
-产物位于 `dist/app-view/`。运行时代码仅使用 Obsidian、CodeMirror 和浏览器接口，不调用 Node.js、Electron、网络接口或遥测服务。
-
-`scripts/` 中的 CDP 和 QA 脚本仅用于开发，不打入插件包。只允许连接 9237 端口、路径为 `F:\Temp\app-view\test-vault` 的隔离库。测试会修改并恢复样例笔记，不要把路径改成个人库。
-
-源码在首次修改前已建立 Git 基准，功能修改保留在工作区中，便于审核和撤销。
