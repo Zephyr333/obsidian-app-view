@@ -818,7 +818,7 @@ export default class ApplicationPlugin extends Plugin {
   }
 
   refreshName() {
-    for (const {command, label} of this.namedCommands) command.name = `${this.manifest.name}: ${label.replace('{name}', this.settings.viewName)}`;
+    for (const {command, label} of this.namedCommands) command.name = label.replace('{name}', this.settings.viewName);
     this.ribbonEl?.setAttribute('aria-label', `详细版／${this.settings.viewName}`);
     for (const action of this.leafActions.values()) action.showEl.setAttribute('aria-label', `左键：查看${this.settings.viewName} | 右键：调整范围`);
     for (const view of this.applicationViews()) view.updateName();

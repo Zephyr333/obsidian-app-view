@@ -12,10 +12,11 @@ class MarkerBadge extends WidgetType {
     this.label = label;
   }
   toDOM(view: EditorView): HTMLElement {
-    const badge = view.dom.ownerDocument.createElement('span');
-    badge.className = 'app-view-marker-badge';
-    badge.textContent = this.label;
-    return badge;
+    const win = view.dom.ownerDocument.defaultView;
+    return (win?.createSpan ?? createSpan)({
+      cls: 'app-view-marker-badge',
+      text: this.label
+    });
   }
   eq(other: MarkerBadge): boolean {
     return this.label === other.label;

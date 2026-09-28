@@ -1,12 +1,35 @@
 # 速查版 (Quick View)
 
+[English](#english) | [中文说明](#中文说明)
+
+---
+
+<span id="english"></span>
+
+## English Overview
+
+**Quick View** extracts and projects marked sections from your notes into a clean, read-only view in the exact order of the original note. Your full note remains the single source of truth, while editing stays native to Live Preview.
+
+- **Native Dual-State Toggle**: Click the header action icon (`zap` / `file-text`) to switch in-place between Detailed view and Quick View. `Ctrl/Cmd + Click` opens in a new tab; `Ctrl + Alt + Click` opens in a split pane for side-by-side comparison.
+- **State Memory**: Remembers the last viewed state for each note independently across restarts and file navigation.
+- **Smart Range Selection**: Select text or right-click headings, list items, callouts, or tables to include entire blocks with zero manual fence typing.
+- **Interactive Checklists**: Toggle tasks (`- [ ]` / `- [x]`) directly within the read-only projection; changes write atomically back to the source Markdown.
+- **Bi-directional Navigation**: Smoothly jump from any projected section back to its exact line in the editor with high-precision highlighting.
+- **Pure Local & Zero Lock-in**: Ranges are stored cleanly as comments (`%%app%% ... %%/app%%`) inside your note, requiring no external databases, servers, or lock-in.
+
+---
+
+<span id="中文说明"></span>
+
+## 中文说明
+
 详细版是唯一正文。选择范围，得到按原文顺序排列、自动更新的纯净只读速查视图。编辑始终留在 Live Preview。
 
-## 安装
+### 安装
 
-当前版本：1.0.0。最低 Obsidian 版本设为 **1.13.7**。
+当前版本：1.0.7。最低 Obsidian 版本设为 **1.13.7**。
 
-1. 解压 `app-view-1.0.0.zip`，得到 `app-view` 文件夹，里面有 `main.js`、`manifest.json`、`styles.css`。
+1. 解压 `app-view-1.0.7.zip`，得到 `app-view` 文件夹，里面有 `main.js`、`manifest.json`、`styles.css`。
 2. 将文件夹放入目标库的插件目录。默认是 `<你的库>/.obsidian/plugins/app-view/`；自定义过库配置目录时，使用实际配置目录下的 `plugins`。
 3. 在 Obsidian 设置 → 第三方插件中启用“速查版”。必要时重新加载 Obsidian。
 4. 电脑和手机分别安装并启用。正文通过你已有的方式同步；插件不提供额外同步服务。
