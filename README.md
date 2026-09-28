@@ -27,9 +27,9 @@
 
 ### 安装
 
-当前版本：1.0.7。最低 Obsidian 版本设为 **1.13.7**。
+当前版本：1.0.8。最低 Obsidian 版本设为 **1.13.7**。
 
-1. 解压 `app-view-1.0.7.zip`，得到 `app-view` 文件夹，里面有 `main.js`、`manifest.json`、`styles.css`。
+1. 解压 `app-view-1.0.8.zip`，得到 `app-view` 文件夹，里面有 `main.js`、`manifest.json`、`styles.css`。
 2. 将文件夹放入目标库的插件目录。默认是 `<你的库>/.obsidian/plugins/app-view/`；自定义过库配置目录时，使用实际配置目录下的 `plugins`。
 3. 在 Obsidian 设置 → 第三方插件中启用“速查版”。必要时重新加载 Obsidian。
 4. 电脑和手机分别安装并启用。正文通过你已有的方式同步；插件不提供额外同步服务。

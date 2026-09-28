@@ -1,7 +1,7 @@
 {
   "id": "app-view",
-  "name": "速查版",
-  "version": "1.0.7",
+  "name": "Quick View",
+  "version": "1.0.8",
   "minAppVersion": "1.13.7",
   "description": "Extract and view key points in a clean, read-only quick view within the same note. Dual-state toggle with memory.",
   "author": "Zephyr333",
